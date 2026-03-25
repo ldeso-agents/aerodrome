@@ -220,8 +220,12 @@ async function fetchLogsChunked<T>(
 ): Promise<T[]> {
   try {
     return await client.getLogs({ ...params, fromBlock, toBlock }) as T[];
-  } catch {
-    if (toBlock - fromBlock <= 1000n) throw new Error(`getLogs failed for range ${fromBlock}-${toBlock}`);
+  } catch (e) {
+    if (toBlock - fromBlock <= 10_000n) {
+      // Small range still failing — likely contract didn't exist yet; skip silently
+      console.warn(`  Skipping block range ${fromBlock}–${toBlock}: ${(e as Error).message?.slice(0, 80)}`);
+      return [];
+    }
     const mid = fromBlock + (toBlock - fromBlock) / 2n;
     const [left, right] = await Promise.all([
       fetchLogsChunked<T>(client, params, fromBlock, mid),
@@ -503,18 +507,34 @@ async function main() {
     console.log(`  Voter contract: ${voterAddress}`);
 
     const latestBlock = await client.getBlockNumber();
+    // Find earliest epoch timestamp to derive a reasonable start block (avoid scanning from genesis)
+    let earliestEpochTs = Infinity;
+    for (const epochs of allEpochs.values()) {
+      for (const ep of epochs) {
+        const ts = Number(ep.ts);
+        if (ts > 0 && ts < earliestEpochTs) earliestEpochTs = ts;
+      }
+    }
+    // Estimate start block: Base produces ~2s blocks; go back a bit before earliest epoch
+    const nowTs = Math.floor(Date.now() / 1000);
+    const startBlock = earliestEpochTs < Infinity
+      ? latestBlock - BigInt(Math.ceil((nowTs - earliestEpochTs + WEEK) / 2))
+      : 0n;
+    const safeStartBlock = startBlock > 0n ? startBlock : 0n;
+    console.log(`  Scanning events from block ${safeStartBlock} to ${latestBlock}`);
+
     type LogEntry = { args: { pool: Address; tokenId: bigint; weight: bigint; timestamp: bigint }; blockNumber: bigint; logIndex: number };
 
     const [votedLogs, abstainedLogs] = await Promise.all([
       fetchLogsChunked<LogEntry>(
         client,
         { address: voterAddress, event: votedEvent, args: { voter: addressFilter } },
-        0n, latestBlock,
+        safeStartBlock, latestBlock,
       ),
       fetchLogsChunked<LogEntry>(
         client,
         { address: voterAddress, event: abstainedEvent, args: { voter: addressFilter } },
-        0n, latestBlock,
+        safeStartBlock, latestBlock,
       ),
     ]);
 
