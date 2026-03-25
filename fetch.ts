@@ -211,7 +211,7 @@ type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd
 
 // -- Helpers --
 
-/** Fetch event logs, splitting block range on RPC limit errors and retrying with backoff on transient errors. */
+/** Fetch event logs, retrying on transient errors and splitting on block range limits. */
 async function fetchLogsChunked<T>(
   client: ReturnType<typeof createPublicClient>,
   params: { address: Address; event: any; args: any },
@@ -224,15 +224,13 @@ async function fetchLogsChunked<T>(
     try {
       return await client.getLogs({ ...params, fromBlock, toBlock }) as T[];
     } catch (e) {
-      const msg = String((e as Error)?.message ?? e);
-      const isRateLimit = /429|rate|too many|throttl/i.test(msg);
-      if (isRateLimit && attempt < MAX_RETRIES) {
+      if (attempt < MAX_RETRIES) {
         const backoff = Math.min(2 ** attempt, MAX_BACKOFF_S);
-        console.warn(`  Rate limited on blocks ${fromBlock}–${toBlock}, retrying in ${backoff}s (${attempt + 1}/${MAX_RETRIES})`);
+        console.warn(`  getLogs failed for blocks ${fromBlock}–${toBlock}, retrying in ${backoff}s (${attempt + 1}/${MAX_RETRIES})`);
         await new Promise((r) => setTimeout(r, backoff * 1000));
         continue;
       }
-      // Not a rate limit — try splitting the range
+      // Retries exhausted — try splitting the range
       if (toBlock - fromBlock <= 1000n) throw new Error(`getLogs failed for range ${fromBlock}-${toBlock}`);
       const mid = fromBlock + (toBlock - fromBlock) / 2n;
       const [left, right] = await Promise.all([
