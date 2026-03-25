@@ -6,6 +6,7 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 // https://github.com/velodrome-finance/sugar/blob/main/deployments/base.env
 const LP_SUGAR = "0x3058f92ebf83e2536f2084f20f7c0357d7d3ccfe" as const;
 const REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678" as const;
+const VE_SUGAR = "0x4d6A741cEE6A8cC5632B2d948C050303F6246D24" as const;
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
 
 const PAGE = 200;
@@ -90,40 +91,45 @@ const lpSugarAbi = [
     stateMutability: "view",
     type: "function",
   },
+] as const;
+
+const veSugarAbi = [
   {
-    inputs: [],
-    name: "voter",
-    outputs: [{ name: "", type: "address" }],
+    inputs: [{ name: "_account", type: "address" }],
+    name: "byAccount",
+    outputs: [
+      {
+        components: [
+          { name: "id", type: "uint256" },
+          { name: "account", type: "address" },
+          { name: "decimals", type: "uint8" },
+          { name: "amount", type: "uint128" },
+          { name: "voting_amount", type: "uint256" },
+          { name: "governance_amount", type: "uint256" },
+          { name: "rebase_amount", type: "uint256" },
+          { name: "expires_at", type: "uint256" },
+          { name: "voted_at", type: "uint256" },
+          {
+            components: [
+              { name: "lp", type: "address" },
+              { name: "weight", type: "uint256" },
+            ],
+            name: "votes",
+            type: "tuple[]",
+          },
+          { name: "token", type: "address" },
+          { name: "permanent", type: "bool" },
+          { name: "delegate_id", type: "uint256" },
+          { name: "managed_id", type: "uint256" },
+        ],
+        name: "",
+        type: "tuple[]",
+      },
+    ],
     stateMutability: "view",
     type: "function",
   },
 ] as const;
-
-const votedEvent = {
-  type: "event",
-  name: "Voted",
-  inputs: [
-    { name: "voter", type: "address", indexed: true },
-    { name: "pool", type: "address", indexed: true },
-    { name: "tokenId", type: "uint256", indexed: true },
-    { name: "weight", type: "uint256", indexed: false },
-    { name: "totalWeight", type: "uint256", indexed: false },
-    { name: "timestamp", type: "uint256", indexed: false },
-  ],
-} as const;
-
-const abstainedEvent = {
-  type: "event",
-  name: "Abstained",
-  inputs: [
-    { name: "voter", type: "address", indexed: true },
-    { name: "pool", type: "address", indexed: true },
-    { name: "tokenId", type: "uint256", indexed: true },
-    { name: "weight", type: "uint256", indexed: false },
-    { name: "totalWeight", type: "uint256", indexed: false },
-    { name: "timestamp", type: "uint256", indexed: false },
-  ],
-} as const;
 
 const epochStruct = {
   components: [
@@ -210,37 +216,6 @@ type EpochRecord = {
 type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd)
 
 // -- Helpers --
-
-/** Fetch event logs, retrying on transient errors and splitting on block range limits. */
-async function fetchLogsChunked<T>(
-  client: ReturnType<typeof createPublicClient>,
-  params: { address: Address; event: any; args: any },
-  fromBlock: bigint,
-  toBlock: bigint,
-): Promise<T[]> {
-  const MAX_RETRIES = 5;
-  const MAX_BACKOFF_S = 32;
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await client.getLogs({ ...params, fromBlock, toBlock }) as T[];
-    } catch (e) {
-      if (attempt < MAX_RETRIES) {
-        const backoff = Math.min(2 ** attempt, MAX_BACKOFF_S);
-        console.warn(`  getLogs failed for blocks ${fromBlock}–${toBlock}, retrying in ${backoff}s (${attempt + 1}/${MAX_RETRIES})`);
-        await new Promise((r) => setTimeout(r, backoff * 1000));
-        continue;
-      }
-      // Retries exhausted — try splitting the range
-      if (toBlock - fromBlock <= 1000n) throw new Error(`getLogs failed for range ${fromBlock}-${toBlock}`);
-      const mid = fromBlock + (toBlock - fromBlock) / 2n;
-      const [left, right] = await Promise.all([
-        fetchLogsChunked<T>(client, params, fromBlock, mid),
-        fetchLogsChunked<T>(client, params, mid + 1n, toBlock),
-      ]);
-      return [...left, ...right];
-    }
-  }
-}
 
 /** POST JSON with exponential backoff on 429. Throws on other non-2xx responses. */
 async function postJson(url: string, body: object): Promise<any> {
@@ -501,70 +476,30 @@ async function main() {
     console.log(`  ${label}: ${poolEpochs.length} epochs`);
   }
 
-  // 4b. Fetch address voting history (if --address provided)
-  // addressVotesMap: key = `${epoch_ts}_${pool}` → address votes (number, 18-dec adjusted)
+  // 4b. Fetch current-epoch address votes via VeSugar (if --address provided)
+  // addressVotesMap: pool (lowercase) → address votes (number, 18-dec adjusted)
   const addressVotesMap = new Map<string, number>();
   if (addressFilter) {
-    console.log(`Fetching voting history for ${addressFilter}…`);
-    const voterAddress = await client.readContract({
-      address: LP_SUGAR,
-      abi: lpSugarAbi,
-      functionName: "voter",
+    console.log(`Fetching veNFT votes for ${addressFilter} via VeSugar…`);
+    const veNfts = await client.readContract({
+      address: VE_SUGAR,
+      abi: veSugarAbi,
+      functionName: "byAccount",
+      args: [addressFilter],
     });
-    console.log(`  Voter contract: ${voterAddress}`);
-
-    const latestBlock = await client.getBlockNumber();
-    type LogEntry = { args: { pool: Address; tokenId: bigint; weight: bigint; timestamp: bigint }; blockNumber: bigint; logIndex: number };
-
-    const [votedLogs, abstainedLogs] = await Promise.all([
-      fetchLogsChunked<LogEntry>(
-        client,
-        { address: voterAddress, event: votedEvent, args: { voter: addressFilter } },
-        0n, latestBlock,
-      ),
-      fetchLogsChunked<LogEntry>(
-        client,
-        { address: voterAddress, event: abstainedEvent, args: { voter: addressFilter } },
-        0n, latestBlock,
-      ),
-    ]);
-
-    // Merge and sort by block/logIndex
-    const allVoteEvents = [
-      ...votedLogs.map((l) => ({ ...l.args, type: "voted" as const, blockNumber: l.blockNumber, logIndex: l.logIndex })),
-      ...abstainedLogs.map((l) => ({ ...l.args, type: "abstained" as const, blockNumber: l.blockNumber, logIndex: l.logIndex })),
-    ].sort((a, b) => Number(a.blockNumber - b.blockNumber) || a.logIndex - b.logIndex);
-
-    // Build final state: epoch → pool → tokenId → weight
-    const voteState = new Map<number, Map<string, Map<bigint, bigint>>>();
-    for (const ev of allVoteEvents) {
-      const epochTs = Math.floor(Number(ev.timestamp) / WEEK) * WEEK;
-      let epochMap = voteState.get(epochTs);
-      if (!epochMap) { epochMap = new Map(); voteState.set(epochTs, epochMap); }
-      const poolKey = ev.pool.toLowerCase();
-      let poolMap = epochMap.get(poolKey);
-      if (!poolMap) { poolMap = new Map(); epochMap.set(poolKey, poolMap); }
-      poolMap.set(ev.tokenId, ev.type === "voted" ? ev.weight : 0n);
-    }
-
-    for (const [epochTs, epochMap] of voteState) {
-      for (const [pool, tokenMap] of epochMap) {
-        let total = 0n;
-        for (const w of tokenMap.values()) total += w;
-        if (total > 0n) addressVotesMap.set(`${epochTs}_${pool}`, Number(total) / 1e18);
+    console.log(`  Found ${veNfts.length} veNFT(s)`);
+    for (const nft of veNfts) {
+      for (const v of nft.votes) {
+        const pool = v.lp.toLowerCase();
+        addressVotesMap.set(pool, (addressVotesMap.get(pool) ?? 0) + Number(v.weight) / 1e18);
       }
     }
+    console.log(`  Voting for ${addressVotesMap.size} pool(s)`);
 
-    console.log(`  Found ${allVoteEvents.length} vote events across ${voteState.size} epochs, ${addressVotesMap.size} non-zero (pool, epoch) pairs`);
-
-    // Fetch epoch data for pools the address voted for but not yet in allEpochs
-    const extraPools = new Set<string>();
-    for (const key of addressVotesMap.keys()) {
-      const pool = key.split("_")[1];
-      if (!allEpochs.has(pool) && pools.has(pool)) extraPools.add(pool);
-    }
-    if (extraPools.size > 0) {
-      console.log(`  Fetching epoch data for ${extraPools.size} extra address-voted pools…`);
+    // Fetch epoch data for pools the address votes for but not yet in allEpochs
+    const extraPools = [...addressVotesMap.keys()].filter((p) => !allEpochs.has(p) && pools.has(p));
+    if (extraPools.length > 0) {
+      console.log(`  Fetching epoch data for ${extraPools.length} extra address-voted pools…`);
       for (const addr of extraPools) {
         const poolEpochs: RawEpoch[] = [];
         for (let offset = 0; ; offset += PAGE) {
@@ -611,7 +546,7 @@ async function main() {
     // Include address-voted pools not in top 30
     if (addressFilter) {
       for (const entry of bucket) {
-        if (!top30.has(entry.lp) && addressVotesMap.has(`${ts}_${entry.lp}`)) {
+        if (!top30.has(entry.lp) && addressVotesMap.has(entry.lp)) {
           selectedEntries.push({ ts, lp: entry.lp, ep: entry.ep });
         }
       }
@@ -675,7 +610,7 @@ async function main() {
         bribes_usd: 0,
         bribe_tokens: rewardTokenSymbols(ep.bribes, tokens),
         epoch_number: 0,
-        address_votes: addressVotesMap.get(`${epochStartTs}_${lp}`) ?? 0,
+        address_votes: addressVotesMap.get(lp) ?? 0,
       },
       fees: ep.fees,
       bribes: ep.bribes,
