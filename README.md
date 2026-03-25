@@ -13,6 +13,17 @@ npm install
 npm run fetch
 ```
 
+To include per-address voting history (which pools the address voted for and by
+how many votes), pass `--address`:
+
+```sh
+npm run fetch -- --address 0xa79cd47655156b299762DFE92A67980805ce5a31
+```
+
+This adds an `address_votes` column to the CSV and HTML output showing the
+number of votes cast by the address for each pool in each epoch. Pools the
+address voted for outside the top 30 are included automatically.
+
 ### Environment Variables
 
 | Variable          | Required | Description                               |

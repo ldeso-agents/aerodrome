@@ -90,7 +90,40 @@ const lpSugarAbi = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [],
+    name: "voter",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
+
+const votedEvent = {
+  type: "event",
+  name: "Voted",
+  inputs: [
+    { name: "voter", type: "address", indexed: true },
+    { name: "pool", type: "address", indexed: true },
+    { name: "tokenId", type: "uint256", indexed: true },
+    { name: "weight", type: "uint256", indexed: false },
+    { name: "totalWeight", type: "uint256", indexed: false },
+    { name: "timestamp", type: "uint256", indexed: false },
+  ],
+} as const;
+
+const abstainedEvent = {
+  type: "event",
+  name: "Abstained",
+  inputs: [
+    { name: "voter", type: "address", indexed: true },
+    { name: "pool", type: "address", indexed: true },
+    { name: "tokenId", type: "uint256", indexed: true },
+    { name: "weight", type: "uint256", indexed: false },
+    { name: "totalWeight", type: "uint256", indexed: false },
+    { name: "timestamp", type: "uint256", indexed: false },
+  ],
+} as const;
 
 const epochStruct = {
   components: [
@@ -172,10 +205,31 @@ type EpochRecord = {
   bribes_usd: number;
   bribe_tokens: string[];
   epoch_number: number;
+  address_votes: number;
 };
 type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd)
 
 // -- Helpers --
+
+/** Fetch event logs, splitting block range on error (handles RPC block limits). */
+async function fetchLogsChunked<T>(
+  client: ReturnType<typeof createPublicClient>,
+  params: { address: Address; event: any; args: any },
+  fromBlock: bigint,
+  toBlock: bigint,
+): Promise<T[]> {
+  try {
+    return await client.getLogs({ ...params, fromBlock, toBlock }) as T[];
+  } catch {
+    if (toBlock - fromBlock <= 1000n) throw new Error(`getLogs failed for range ${fromBlock}-${toBlock}`);
+    const mid = fromBlock + (toBlock - fromBlock) / 2n;
+    const [left, right] = await Promise.all([
+      fetchLogsChunked<T>(client, params, fromBlock, mid),
+      fetchLogsChunked<T>(client, params, mid + 1n, toBlock),
+    ]);
+    return [...left, ...right];
+  }
+}
 
 /** POST JSON with exponential backoff on 429. Throws on other non-2xx responses. */
 async function postJson(url: string, body: object): Promise<any> {
@@ -338,6 +392,14 @@ async function main() {
   if (!rpcUrl) throw new Error("BASE_RPC_URL environment variable is required");
   const alchemyKey = process.env.ALCHEMY_API_KEY ?? "";
 
+  // Parse optional --address flag
+  let addressFilter: Address | undefined;
+  const addrIdx = process.argv.indexOf("--address");
+  if (addrIdx !== -1 && process.argv[addrIdx + 1]) {
+    addressFilter = process.argv[addrIdx + 1] as Address;
+    console.log(`Address filter: ${addressFilter}`);
+  }
+
   const client = createPublicClient({
     chain: base,
     transport: http(rpcUrl),
@@ -427,7 +489,92 @@ async function main() {
     console.log(`  ${label}: ${poolEpochs.length} epochs`);
   }
 
+  // 4b. Fetch address voting history (if --address provided)
+  // addressVotesMap: key = `${epoch_ts}_${pool}` → address votes (number, 18-dec adjusted)
+  const addressVotesMap = new Map<string, number>();
+  if (addressFilter) {
+    console.log(`Fetching voting history for ${addressFilter}…`);
+    const voterAddress = await client.readContract({
+      address: LP_SUGAR,
+      abi: lpSugarAbi,
+      functionName: "voter",
+    });
+    console.log(`  Voter contract: ${voterAddress}`);
+
+    const latestBlock = await client.getBlockNumber();
+    type LogEntry = { args: { pool: Address; tokenId: bigint; weight: bigint; timestamp: bigint }; blockNumber: bigint; logIndex: number };
+
+    const [votedLogs, abstainedLogs] = await Promise.all([
+      fetchLogsChunked<LogEntry>(
+        client,
+        { address: voterAddress, event: votedEvent, args: { voter: addressFilter } },
+        0n, latestBlock,
+      ),
+      fetchLogsChunked<LogEntry>(
+        client,
+        { address: voterAddress, event: abstainedEvent, args: { voter: addressFilter } },
+        0n, latestBlock,
+      ),
+    ]);
+
+    // Merge and sort by block/logIndex
+    const allVoteEvents = [
+      ...votedLogs.map((l) => ({ ...l.args, type: "voted" as const, blockNumber: l.blockNumber, logIndex: l.logIndex })),
+      ...abstainedLogs.map((l) => ({ ...l.args, type: "abstained" as const, blockNumber: l.blockNumber, logIndex: l.logIndex })),
+    ].sort((a, b) => Number(a.blockNumber - b.blockNumber) || a.logIndex - b.logIndex);
+
+    // Build final state: epoch → pool → tokenId → weight
+    const voteState = new Map<number, Map<string, Map<bigint, bigint>>>();
+    for (const ev of allVoteEvents) {
+      const epochTs = Math.floor(Number(ev.timestamp) / WEEK) * WEEK;
+      let epochMap = voteState.get(epochTs);
+      if (!epochMap) { epochMap = new Map(); voteState.set(epochTs, epochMap); }
+      const poolKey = ev.pool.toLowerCase();
+      let poolMap = epochMap.get(poolKey);
+      if (!poolMap) { poolMap = new Map(); epochMap.set(poolKey, poolMap); }
+      poolMap.set(ev.tokenId, ev.type === "voted" ? ev.weight : 0n);
+    }
+
+    for (const [epochTs, epochMap] of voteState) {
+      for (const [pool, tokenMap] of epochMap) {
+        let total = 0n;
+        for (const w of tokenMap.values()) total += w;
+        if (total > 0n) addressVotesMap.set(`${epochTs}_${pool}`, Number(total) / 1e18);
+      }
+    }
+
+    console.log(`  Found ${allVoteEvents.length} vote events across ${voteState.size} epochs, ${addressVotesMap.size} non-zero (pool, epoch) pairs`);
+
+    // Fetch epoch data for pools the address voted for but not yet in allEpochs
+    const extraPools = new Set<string>();
+    for (const key of addressVotesMap.keys()) {
+      const pool = key.split("_")[1];
+      if (!allEpochs.has(pool) && pools.has(pool)) extraPools.add(pool);
+    }
+    if (extraPools.size > 0) {
+      console.log(`  Fetching epoch data for ${extraPools.size} extra address-voted pools…`);
+      for (const addr of extraPools) {
+        const poolEpochs: RawEpoch[] = [];
+        for (let offset = 0; ; offset += PAGE) {
+          const page = await client.readContract({
+            address: REWARDS_SUGAR,
+            abi: rewardsSugarAbi,
+            functionName: "epochsByAddress",
+            args: [BigInt(PAGE), BigInt(offset), addr as Address],
+          });
+          poolEpochs.push(...page);
+          if (page.length < PAGE) break;
+        }
+        allEpochs.set(addr, poolEpochs);
+        const pool = pools.get(addr);
+        const label = pool ? poolName(pool, tokens) : addr;
+        console.log(`    ${label}: ${poolEpochs.length} epochs`);
+      }
+    }
+  }
+
   // 5. Group by epoch timestamp and keep top 30 pools per epoch by votes
+  //    (plus any pools the tracked address voted for)
   const byEpoch = new Map<number, { lp: string; ep: RawEpoch }[]>();
   for (const [lp, epochs] of allEpochs) {
     for (const ep of epochs) {
@@ -445,8 +592,17 @@ async function main() {
     bucket.sort((a, b) =>
       b.ep.votes > a.ep.votes ? 1 : b.ep.votes < a.ep.votes ? -1 : 0,
     );
+    const top30 = new Set(bucket.slice(0, 30).map((e) => e.lp));
     for (const entry of bucket.slice(0, 30)) {
       selectedEntries.push({ ts, lp: entry.lp, ep: entry.ep });
+    }
+    // Include address-voted pools not in top 30
+    if (addressFilter) {
+      for (const entry of bucket) {
+        if (!top30.has(entry.lp) && addressVotesMap.has(`${ts}_${entry.lp}`)) {
+          selectedEntries.push({ ts, lp: entry.lp, ep: entry.ep });
+        }
+      }
     }
   }
   console.log(
@@ -507,6 +663,7 @@ async function main() {
         bribes_usd: 0,
         bribe_tokens: rewardTokenSymbols(ep.bribes, tokens),
         epoch_number: 0,
+        address_votes: addressVotesMap.get(`${epochStartTs}_${lp}`) ?? 0,
       },
       fees: ep.fees,
       bribes: ep.bribes,
@@ -676,7 +833,8 @@ async function main() {
             <td class="right">${usdFmt(r.fees_token1_usd)}</td>
             <td>${escapeHtml(r.token1)}</td>
             <td class="right">${usdFmt(r.bribes_usd)}</td>
-            <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
+            <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>${addressFilter ? `
+            <td class="right">${fmt(r.address_votes)}</td>` : ""}
           </tr>`,
         )
         .join("\n");
@@ -697,7 +855,8 @@ async function main() {
             <th class="right">Fees Token1 (USD)</th>
             <th>Token1</th>
             <th class="right">Bribes (USD)</th>
-            <th>Bribe Tokens</th>
+            <th>Bribe Tokens</th>${addressFilter ? `
+            <th class="right">Addr Votes</th>` : ""}
           </tr>
         </thead>
         <tbody>
@@ -738,7 +897,7 @@ ${sections.join("\n")}
   }
 
   // 12. Write votes.csv
-  const fields = [
+  const baseFields = [
     "epoch_number",
     "epoch_date",
     "pool_name",
@@ -753,6 +912,9 @@ ${sections.join("\n")}
     "bribe_tokens",
     "pool_address",
   ] as const;
+  const fields: readonly (keyof EpochRecord)[] = addressFilter
+    ? [...baseFields, "address_votes"]
+    : baseFields;
 
   const csvLines = [fields.join(",")];
   for (const r of records) {
