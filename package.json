@@ -1,0 +1,12 @@
+{
+  "type": "module",
+  "scripts": {
+    "fetch": "tsx fetch.ts"
+  },
+  "dependencies": {
+    "viem": "^2"
+  },
+  "devDependencies": {
+    "tsx": "^4"
+  }
+}
