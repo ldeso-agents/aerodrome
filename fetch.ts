@@ -392,12 +392,13 @@ async function main() {
   if (!rpcUrl) throw new Error("BASE_RPC_URL environment variable is required");
   const alchemyKey = process.env.ALCHEMY_API_KEY ?? "";
 
-  // Parse optional --address flag
+  // Parse optional --address flag (supports both --address 0x… and --address=0x…)
   let addressFilter: Address | undefined;
-  const addrIdx = process.argv.indexOf("--address");
-  if (addrIdx !== -1 && process.argv[addrIdx + 1]) {
-    addressFilter = process.argv[addrIdx + 1] as Address;
-    console.log(`Address filter: ${addressFilter}`);
+  const addrArg = process.argv.find((a) => a.startsWith("--address"));
+  if (addrArg) {
+    const eqVal = addrArg.split("=")[1];
+    addressFilter = (eqVal || process.argv[process.argv.indexOf(addrArg) + 1]) as Address;
+    if (addressFilter) console.log(`Address filter: ${addressFilter}`);
   }
 
   const client = createPublicClient({
