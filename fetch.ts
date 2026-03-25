@@ -211,23 +211,36 @@ type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd
 
 // -- Helpers --
 
-/** Fetch event logs, splitting block range on error (handles RPC block limits). */
+/** Fetch event logs, splitting block range on RPC limit errors and retrying with backoff on transient errors. */
 async function fetchLogsChunked<T>(
   client: ReturnType<typeof createPublicClient>,
   params: { address: Address; event: any; args: any },
   fromBlock: bigint,
   toBlock: bigint,
 ): Promise<T[]> {
-  try {
-    return await client.getLogs({ ...params, fromBlock, toBlock }) as T[];
-  } catch {
-    if (toBlock - fromBlock <= 1000n) throw new Error(`getLogs failed for range ${fromBlock}-${toBlock}`);
-    const mid = fromBlock + (toBlock - fromBlock) / 2n;
-    const [left, right] = await Promise.all([
-      fetchLogsChunked<T>(client, params, fromBlock, mid),
-      fetchLogsChunked<T>(client, params, mid + 1n, toBlock),
-    ]);
-    return [...left, ...right];
+  const MAX_RETRIES = 5;
+  const MAX_BACKOFF_S = 32;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await client.getLogs({ ...params, fromBlock, toBlock }) as T[];
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      const isRateLimit = /429|rate|too many|throttl/i.test(msg);
+      if (isRateLimit && attempt < MAX_RETRIES) {
+        const backoff = Math.min(2 ** attempt, MAX_BACKOFF_S);
+        console.warn(`  Rate limited on blocks ${fromBlock}–${toBlock}, retrying in ${backoff}s (${attempt + 1}/${MAX_RETRIES})`);
+        await new Promise((r) => setTimeout(r, backoff * 1000));
+        continue;
+      }
+      // Not a rate limit — try splitting the range
+      if (toBlock - fromBlock <= 1000n) throw new Error(`getLogs failed for range ${fromBlock}-${toBlock}`);
+      const mid = fromBlock + (toBlock - fromBlock) / 2n;
+      const [left, right] = await Promise.all([
+        fetchLogsChunked<T>(client, params, fromBlock, mid),
+        fetchLogsChunked<T>(client, params, mid + 1n, toBlock),
+      ]);
+      return [...left, ...right];
+    }
   }
 }
 
@@ -503,34 +516,18 @@ async function main() {
     console.log(`  Voter contract: ${voterAddress}`);
 
     const latestBlock = await client.getBlockNumber();
-    // Find earliest epoch timestamp to derive a reasonable start block (avoid scanning from genesis)
-    let earliestEpochTs = Infinity;
-    for (const epochs of allEpochs.values()) {
-      for (const ep of epochs) {
-        const ts = Number(ep.ts);
-        if (ts > 0 && ts < earliestEpochTs) earliestEpochTs = ts;
-      }
-    }
-    // Estimate start block: Base produces ~2s blocks; go back a bit before earliest epoch
-    const nowTs = Math.floor(Date.now() / 1000);
-    const startBlock = earliestEpochTs < Infinity
-      ? latestBlock - BigInt(Math.ceil((nowTs - earliestEpochTs + WEEK) / 2))
-      : 0n;
-    const safeStartBlock = startBlock > 0n ? startBlock : 0n;
-    console.log(`  Scanning events from block ${safeStartBlock} to ${latestBlock}`);
-
     type LogEntry = { args: { pool: Address; tokenId: bigint; weight: bigint; timestamp: bigint }; blockNumber: bigint; logIndex: number };
 
     const [votedLogs, abstainedLogs] = await Promise.all([
       fetchLogsChunked<LogEntry>(
         client,
         { address: voterAddress, event: votedEvent, args: { voter: addressFilter } },
-        safeStartBlock, latestBlock,
+        0n, latestBlock,
       ),
       fetchLogsChunked<LogEntry>(
         client,
         { address: voterAddress, event: abstainedEvent, args: { voter: addressFilter } },
-        safeStartBlock, latestBlock,
+        0n, latestBlock,
       ),
     ]);
 
