@@ -1,7 +1,7 @@
 {
   "type": "module",
   "scripts": {
-    "fetch": "tsx fetch.ts"
+    "fetch": "node --env-file-if-exists=.env --import=tsx fetch.ts"
   },
   "dependencies": {
     "viem": "^2"
