@@ -165,8 +165,11 @@ type EpochRecord = {
   votes: number;
   vote_pct: number;
   fees_usd: number;
+  fees_token0_usd: number;
+  token0: string;
+  fees_token1_usd: number;
+  token1: string;
   bribes_usd: number;
-  fee_tokens: string[];
   bribe_tokens: string[];
   epoch_number: number;
 };
@@ -208,6 +211,26 @@ function rewardTokenSymbols(rewards: RawReward, tokenMap: Map<string, TokenMeta>
   return rewards
     .filter((r) => r.amount > 0n)
     .map((r) => tokenMap.get(r.token.toLowerCase())?.symbol ?? "???");
+}
+
+function computeUsdForToken(
+  rewards: RawReward,
+  targetToken: string,
+  tokenMap: Map<string, TokenMeta>,
+  priceMap: PriceMap,
+  date: string,
+): number {
+  let total = 0;
+  for (const r of rewards) {
+    if (r.amount === 0n) continue;
+    const addr = r.token.toLowerCase();
+    if (addr !== targetToken) continue;
+    const decimals = tokenMap.get(addr)?.decimals ?? 18;
+    const amount = Number(r.amount) / 10 ** decimals;
+    const price = priceMap.get(addr)?.get(date) ?? 0;
+    total += amount * price;
+  }
+  return Math.round(total * 100) / 100;
 }
 
 // -- Price helpers --
@@ -460,7 +483,7 @@ async function main() {
   }
 
   // 7. Build entry records from selected per-epoch top 30
-  const entries: { record: EpochRecord; fees: RawReward; bribes: RawReward }[] = [];
+  const entries: { record: EpochRecord; fees: RawReward; bribes: RawReward; pool_token0: string; pool_token1: string }[] = [];
   for (const { lp, ep } of selectedEntries) {
     const pool = pools.get(lp);
     if (!pool) continue;
@@ -477,13 +500,18 @@ async function main() {
         votes: Number(ep.votes) / 1e18,
         vote_pct: 0,
         fees_usd: 0,
+        fees_token0_usd: 0,
+        token0: tokens.get(pool.token0)?.symbol ?? "???",
+        fees_token1_usd: 0,
+        token1: tokens.get(pool.token1)?.symbol ?? "???",
         bribes_usd: 0,
-        fee_tokens: rewardTokenSymbols(ep.fees, tokens),
         bribe_tokens: rewardTokenSymbols(ep.bribes, tokens),
         epoch_number: 0,
       },
       fees: ep.fees,
       bribes: ep.bribes,
+      pool_token0: pool.token0,
+      pool_token1: pool.token1,
     });
   }
 
@@ -554,8 +582,10 @@ async function main() {
       }
     }
 
-    for (const { record, fees, bribes } of entries) {
+    for (const { record, fees, bribes, pool_token0, pool_token1 } of entries) {
       record.fees_usd = computeUsd(fees, tokens, priceMap, record.price_date);
+      record.fees_token0_usd = computeUsdForToken(fees, pool_token0, tokens, priceMap, record.price_date);
+      record.fees_token1_usd = computeUsdForToken(fees, pool_token1, tokens, priceMap, record.price_date);
       record.bribes_usd = computeUsd(bribes, tokens, priceMap, record.price_date);
     }
 
@@ -641,8 +671,11 @@ async function main() {
             <td class="right">${fmt(r.votes)}</td>
             <td class="right">${r.vote_pct.toFixed(2)}%</td>
             <td class="right">${usdFmt(r.fees_usd)}</td>
+            <td class="right">${usdFmt(r.fees_token0_usd)}</td>
+            <td>${escapeHtml(r.token0)}</td>
+            <td class="right">${usdFmt(r.fees_token1_usd)}</td>
+            <td>${escapeHtml(r.token1)}</td>
             <td class="right">${usdFmt(r.bribes_usd)}</td>
-            <td><div class="tags">${tagSpans(r.fee_tokens)}</div></td>
             <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
           </tr>`,
         )
@@ -659,8 +692,11 @@ async function main() {
             <th class="right">Votes</th>
             <th class="right">Vote %</th>
             <th class="right">Fees (USD)</th>
+            <th class="right">Fees Token0 (USD)</th>
+            <th>Token0</th>
+            <th class="right">Fees Token1 (USD)</th>
+            <th>Token1</th>
             <th class="right">Bribes (USD)</th>
-            <th>Fee Tokens</th>
             <th>Bribe Tokens</th>
           </tr>
         </thead>
@@ -706,13 +742,16 @@ ${sections.join("\n")}
     "epoch_number",
     "epoch_date",
     "pool_name",
-    "pool_address",
     "votes",
     "vote_pct",
     "fees_usd",
+    "fees_token0_usd",
+    "token0",
+    "fees_token1_usd",
+    "token1",
     "bribes_usd",
-    "fee_tokens",
     "bribe_tokens",
+    "pool_address",
   ] as const;
 
   const csvLines = [fields.join(",")];
