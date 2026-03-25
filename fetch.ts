@@ -220,12 +220,8 @@ async function fetchLogsChunked<T>(
 ): Promise<T[]> {
   try {
     return await client.getLogs({ ...params, fromBlock, toBlock }) as T[];
-  } catch (e) {
-    if (toBlock - fromBlock <= 10_000n) {
-      // Small range still failing — likely contract didn't exist yet; skip silently
-      console.warn(`  Skipping block range ${fromBlock}–${toBlock}: ${(e as Error).message?.slice(0, 80)}`);
-      return [];
-    }
+  } catch {
+    if (toBlock - fromBlock <= 1000n) throw new Error(`getLogs failed for range ${fromBlock}-${toBlock}`);
     const mid = fromBlock + (toBlock - fromBlock) / 2n;
     const [left, right] = await Promise.all([
       fetchLogsChunked<T>(client, params, fromBlock, mid),
