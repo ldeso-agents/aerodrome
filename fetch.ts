@@ -170,16 +170,17 @@ type EpochRecord = {
   pool_address: string;
   votes: number;
   vote_pct: number;
+  addr_votes: number;
+  addr_vote_pct: number;
+  fees_bribes_usd: number;
   fees_usd: number;
+  bribes_usd: number;
+  bribe_tokens: string[];
   fees_token0_usd: number;
   token0: string;
   fees_token1_usd: number;
   token1: string;
-  bribes_usd: number;
-  bribe_tokens: string[];
   epoch_number: number;
-  addr_votes: number;
-  addr_vote_pct: number;
 };
 type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd)
 
@@ -620,18 +621,19 @@ async function main() {
         pool_address: ep.lp,
         votes: Number(ep.votes) / 1e18,
         vote_pct: 0,
-        fees_usd: 0,
-        fees_token0_usd: 0,
-        token0: tokens.get(pool.token0)?.symbol ?? "???",
-        fees_token1_usd: 0,
-        token1: tokens.get(pool.token1)?.symbol ?? "???",
-        bribes_usd: 0,
-        bribe_tokens: rewardTokenSymbols(ep.bribes, tokens),
-        epoch_number: 0,
         addr_votes: addrVotesForPool,
         addr_vote_pct: addrTotalForEpoch > 0
           ? Math.round((addrVotesForPool / addrTotalForEpoch) * 100 * 10000) / 10000
           : 0,
+        fees_bribes_usd: 0,
+        fees_usd: 0,
+        bribes_usd: 0,
+        bribe_tokens: rewardTokenSymbols(ep.bribes, tokens),
+        fees_token0_usd: 0,
+        token0: tokens.get(pool.token0)?.symbol ?? "???",
+        fees_token1_usd: 0,
+        token1: tokens.get(pool.token1)?.symbol ?? "???",
+        epoch_number: 0,
       },
       fees: ep.fees,
       bribes: ep.bribes,
@@ -712,6 +714,7 @@ async function main() {
       record.fees_token0_usd = computeUsdForToken(fees, pool_token0, tokens, priceMap, record.price_date);
       record.fees_token1_usd = computeUsdForToken(fees, pool_token1, tokens, priceMap, record.price_date);
       record.bribes_usd = computeUsd(bribes, tokens, priceMap, record.price_date);
+      record.fees_bribes_usd = Math.round((record.fees_usd + record.bribes_usd) * 100) / 100;
     }
 
     // Save only completed-epoch prices
@@ -787,6 +790,42 @@ async function main() {
       const [, epochRecords] = sortedEpochs[i];
       epochRecords.sort((a, b) => b.votes - a.votes);
       const first = epochRecords[0];
+
+      // Compute totals for the epoch
+      const totals = {
+        votes: 0, vote_pct: 0, addr_votes: 0, addr_vote_pct: 0,
+        fees_bribes_usd: 0, fees_usd: 0, bribes_usd: 0,
+        fees_token0_usd: 0, fees_token1_usd: 0,
+      };
+      for (const r of epochRecords) {
+        totals.votes += r.votes;
+        totals.vote_pct += r.vote_pct;
+        totals.addr_votes += r.addr_votes;
+        totals.addr_vote_pct += r.addr_vote_pct;
+        totals.fees_bribes_usd += r.fees_bribes_usd;
+        totals.fees_usd += r.fees_usd;
+        totals.bribes_usd += r.bribes_usd;
+        totals.fees_token0_usd += r.fees_token0_usd;
+        totals.fees_token1_usd += r.fees_token1_usd;
+      }
+
+      const totalRow = `          <tr style="font-weight:600;background:#f0f0f0">
+            <td></td>
+            <td>TOTAL</td>
+            <td class="right">${fmt(totals.votes)}</td>
+            <td class="right">${totals.vote_pct.toFixed(2)}%</td>
+            <td class="right">${fmt(totals.addr_votes)}</td>
+            <td class="right">${totals.addr_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(totals.fees_bribes_usd)}</td>
+            <td class="right">${usdFmt(totals.fees_usd)}</td>
+            <td class="right">${usdFmt(totals.bribes_usd)}</td>
+            <td></td>
+            <td class="right">${usdFmt(totals.fees_token0_usd)}</td>
+            <td></td>
+            <td class="right">${usdFmt(totals.fees_token1_usd)}</td>
+            <td></td>
+          </tr>`;
+
       const rows = epochRecords
         .map(
           (r, j) =>
@@ -795,15 +834,16 @@ async function main() {
             <td>${escapeHtml(r.pool_name)}</td>
             <td class="right">${fmt(r.votes)}</td>
             <td class="right">${r.vote_pct.toFixed(2)}%</td>
+            <td class="right">${fmt(r.addr_votes)}</td>
+            <td class="right">${r.addr_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.fees_bribes_usd)}</td>
             <td class="right">${usdFmt(r.fees_usd)}</td>
+            <td class="right">${usdFmt(r.bribes_usd)}</td>
+            <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
             <td class="right">${usdFmt(r.fees_token0_usd)}</td>
             <td>${escapeHtml(r.token0)}</td>
             <td class="right">${usdFmt(r.fees_token1_usd)}</td>
             <td>${escapeHtml(r.token1)}</td>
-            <td class="right">${usdFmt(r.bribes_usd)}</td>
-            <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
-            <td class="right">${fmt(r.addr_votes)}</td>
-            <td class="right">${r.addr_vote_pct.toFixed(2)}%</td>
           </tr>`,
         )
         .join("\n");
@@ -818,18 +858,20 @@ async function main() {
             <th>Pool</th>
             <th class="right">Votes</th>
             <th class="right">Vote %</th>
+            <th class="right">Addr Votes</th>
+            <th class="right">Addr Vote %</th>
+            <th class="right">Fees + Bribes (USD)</th>
             <th class="right">Fees (USD)</th>
+            <th class="right">Bribes (USD)</th>
+            <th>Bribe Tokens</th>
             <th class="right">Fees Token0 (USD)</th>
             <th>Token0</th>
             <th class="right">Fees Token1 (USD)</th>
             <th>Token1</th>
-            <th class="right">Bribes (USD)</th>
-            <th>Bribe Tokens</th>
-            <th class="right">Addr Votes</th>
-            <th class="right">Addr Vote %</th>
           </tr>
         </thead>
         <tbody>
+  ${totalRow}
   ${rows}
         </tbody>
       </table>
@@ -874,16 +916,17 @@ ${sections.join("\n")}
     "pool_name",
     "votes",
     "vote_pct",
+    "addr_votes",
+    "addr_vote_pct",
+    "fees_bribes_usd",
     "fees_usd",
+    "bribes_usd",
+    "bribe_tokens",
     "fees_token0_usd",
     "token0",
     "fees_token1_usd",
     "token1",
-    "bribes_usd",
-    "bribe_tokens",
     "pool_address",
-    "addr_votes",
-    "addr_vote_pct",
   ] as const;
 
   const csvLines = [fields.join(",")];
