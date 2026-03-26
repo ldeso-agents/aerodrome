@@ -470,13 +470,9 @@ async function main() {
     const BLOCK_CHUNK = 10_000n;
     const BATCH_CONCURRENCY = 10;
     const latestBlock = await client.getBlockNumber();
-    const latestBlockData = await client.getBlock({ blockNumber: latestBlock });
 
-    // Estimate starting block from earliest epoch (~2s/block on Base)
-    const earliestEpochTs = Math.min(...[...byEpoch.keys()]);
-    const secsBack = Number(latestBlockData.timestamp) - earliestEpochTs;
-    const blocksBack = BigInt(Math.ceil(secsBack / 2) + 50_000); // buffer
-    const startBlock = latestBlock > blocksBack ? latestBlock - blocksBack : 0n;
+    // Aerodrome Voter contract deployment block on Base
+    const startBlock = 3_022_926n;
 
     const totalChunks = Number((latestBlock - startBlock) / BLOCK_CHUNK) + 1;
     let processed = 0;
