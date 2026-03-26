@@ -791,17 +791,17 @@ async function main() {
       epochRecords.sort((a, b) => b.votes - a.votes);
       const first = epochRecords[0];
 
-      // Compute totals for the epoch
+      // Compute totals for the epoch (use true totals for votes and addr votes)
+      const trueVotes = epochTotals.get(first.epoch_ts) ?? 0;
+      const epochAddrPoolVotes = addrVotesByEpoch.get(first.epoch_ts);
+      const trueAddrVotes = epochAddrPoolVotes
+        ? [...epochAddrPoolVotes.values()].reduce((a, b) => a + b, 0)
+        : 0;
       const totals = {
-        votes: 0, vote_pct: 0, addr_votes: 0, addr_vote_pct: 0,
         fees_bribes_usd: 0, fees_usd: 0, bribes_usd: 0,
         fees_token0_usd: 0, fees_token1_usd: 0,
       };
       for (const r of epochRecords) {
-        totals.votes += r.votes;
-        totals.vote_pct += r.vote_pct;
-        totals.addr_votes += r.addr_votes;
-        totals.addr_vote_pct += r.addr_vote_pct;
         totals.fees_bribes_usd += r.fees_bribes_usd;
         totals.fees_usd += r.fees_usd;
         totals.bribes_usd += r.bribes_usd;
@@ -812,10 +812,10 @@ async function main() {
       const totalRow = `          <tr style="font-weight:600;background:#f0f0f0">
             <td></td>
             <td>TOTAL</td>
-            <td class="right">${fmt(totals.votes)}</td>
-            <td class="right">${totals.vote_pct.toFixed(2)}%</td>
-            <td class="right">${fmt(totals.addr_votes)}</td>
-            <td class="right">${totals.addr_vote_pct.toFixed(2)}%</td>
+            <td class="right">${fmt(trueVotes)}</td>
+            <td class="right">100.00%</td>
+            <td class="right">${fmt(trueAddrVotes)}</td>
+            <td class="right">${trueAddrVotes > 0 ? "100.00%" : "0.00%"}</td>
             <td class="right">${usdFmt(totals.fees_bribes_usd)}</td>
             <td class="right">${usdFmt(totals.fees_usd)}</td>
             <td class="right">${usdFmt(totals.bribes_usd)}</td>
