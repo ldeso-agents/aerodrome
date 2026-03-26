@@ -797,17 +797,6 @@ async function main() {
       const trueAddrVotes = epochAddrPoolVotes
         ? [...epochAddrPoolVotes.values()].reduce((a, b) => a + b, 0)
         : 0;
-      const totals = {
-        fees_bribes_usd: 0, fees_usd: 0, bribes_usd: 0,
-        fees_token0_usd: 0, fees_token1_usd: 0,
-      };
-      for (const r of epochRecords) {
-        totals.fees_bribes_usd += r.fees_bribes_usd;
-        totals.fees_usd += r.fees_usd;
-        totals.bribes_usd += r.bribes_usd;
-        totals.fees_token0_usd += r.fees_token0_usd;
-        totals.fees_token1_usd += r.fees_token1_usd;
-      }
 
       const totalRow = `          <tr style="font-weight:600;background:#f0f0f0">
             <td></td>
@@ -816,13 +805,13 @@ async function main() {
             <td class="right">100.00%</td>
             <td class="right">${fmt(trueAddrVotes)}</td>
             <td class="right">${trueAddrVotes > 0 ? "100.00%" : "0.00%"}</td>
-            <td class="right">${usdFmt(totals.fees_bribes_usd)}</td>
-            <td class="right">${usdFmt(totals.fees_usd)}</td>
-            <td class="right">${usdFmt(totals.bribes_usd)}</td>
             <td></td>
-            <td class="right">${usdFmt(totals.fees_token0_usd)}</td>
             <td></td>
-            <td class="right">${usdFmt(totals.fees_token1_usd)}</td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
             <td></td>
           </tr>`;
 
