@@ -467,31 +467,55 @@ async function main() {
   console.log(`Fetching voting history for ${voterAddress}…`);
   const addrVotesByEpoch = new Map<number, Map<string, number>>(); // epoch_ts -> pool -> votes
   {
-    const BLOCK_CHUNK = 5_000_000n;
+    const BLOCK_CHUNK = 10_000n;
+    const BATCH_CONCURRENCY = 10;
     const latestBlock = await client.getBlockNumber();
-    for (let fromBlock = 0n; fromBlock <= latestBlock; fromBlock += BLOCK_CHUNK) {
-      const toBlock = fromBlock + BLOCK_CHUNK - 1n > latestBlock ? latestBlock : fromBlock + BLOCK_CHUNK - 1n;
-      const logs = await client.getLogs({
-        address: VOTER,
-        event: votedEvent,
-        args: { voter: voterAddress },
-        fromBlock,
-        toBlock,
-      });
-      for (const log of logs) {
-        const pool = log.args.pool!.toLowerCase();
-        const weight = Number(log.args.weight!) / 1e18;
-        const ts = Number(log.args.timestamp!);
-        const epochTs = ts - (ts % WEEK);
-        let poolVotes = addrVotesByEpoch.get(epochTs);
-        if (!poolVotes) {
-          poolVotes = new Map();
-          addrVotesByEpoch.set(epochTs, poolVotes);
-        }
-        poolVotes.set(pool, (poolVotes.get(pool) ?? 0) + weight);
+    const latestBlockData = await client.getBlock({ blockNumber: latestBlock });
+
+    // Estimate starting block from earliest epoch (~2s/block on Base)
+    const earliestEpochTs = Math.min(...[...byEpoch.keys()]);
+    const secsBack = Number(latestBlockData.timestamp) - earliestEpochTs;
+    const blocksBack = BigInt(Math.ceil(secsBack / 2) + 50_000); // buffer
+    const startBlock = latestBlock > blocksBack ? latestBlock - blocksBack : 0n;
+
+    const totalChunks = Number((latestBlock - startBlock) / BLOCK_CHUNK) + 1;
+    let processed = 0;
+    console.log(`  scanning blocks ${startBlock}–${latestBlock} (${totalChunks} chunks)…`);
+
+    for (let batchStart = startBlock; batchStart <= latestBlock; batchStart += BLOCK_CHUNK * BigInt(BATCH_CONCURRENCY)) {
+      const batch: Promise<any[]>[] = [];
+      for (let i = 0; i < BATCH_CONCURRENCY; i++) {
+        const from = batchStart + BLOCK_CHUNK * BigInt(i);
+        if (from > latestBlock) break;
+        const to = from + BLOCK_CHUNK - 1n > latestBlock ? latestBlock : from + BLOCK_CHUNK - 1n;
+        batch.push(
+          client.getLogs({
+            address: VOTER,
+            event: votedEvent,
+            args: { voter: voterAddress },
+            fromBlock: from,
+            toBlock: to,
+          }),
+        );
       }
-      if (fromBlock === 0n) {
-        console.log(`  scanning blocks 0–${toBlock}…`);
+      const results = await Promise.all(batch);
+      for (const logs of results) {
+        for (const log of logs) {
+          const pool = log.args.pool!.toLowerCase();
+          const weight = Number(log.args.weight!) / 1e18;
+          const ts = Number(log.args.timestamp!);
+          const epochTs = ts - (ts % WEEK);
+          let poolVotes = addrVotesByEpoch.get(epochTs);
+          if (!poolVotes) {
+            poolVotes = new Map();
+            addrVotesByEpoch.set(epochTs, poolVotes);
+          }
+          poolVotes.set(pool, (poolVotes.get(pool) ?? 0) + weight);
+        }
+        processed++;
+      }
+      if (processed % 200 === 0) {
+        console.log(`  ${processed}/${totalChunks} chunks scanned…`);
       }
     }
     const totalAddrVotes = [...addrVotesByEpoch.values()].reduce(
