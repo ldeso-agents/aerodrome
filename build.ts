@@ -13,9 +13,9 @@ type EpochRecord = {
   pool_name: string;
   total_votes: number;
   pool_votes: number;
-  pool_vote_pct: number;
+  pool_votes_usd: number;
   voter_votes: number;
-  voter_vote_pct: number;
+  voter_votes_usd: number;
   fees_bribes_usd: number;
   fees_usd: number;
   bribes_usd: number;
@@ -24,6 +24,7 @@ type EpochRecord = {
   token0: string;
   fees_token1_usd: number;
   token1: string;
+  aero_usd: number;
   pool_address: string;
   voter_address: string;
 };
@@ -42,27 +43,24 @@ for (let i = 1; i < lines.length; i++) {
     pool_name: cols[idx("pool_name")],
     total_votes: parseFloat(cols[idx("total_votes")]),
     pool_votes: parseFloat(cols[idx("pool_votes")]),
-    pool_vote_pct: parseFloat(cols[idx("pool_vote_pct")]),
+    pool_votes_usd: parseFloat(cols[idx("pool_votes_usd")]),
     voter_votes: parseFloat(cols[idx("voter_votes")]),
-    voter_vote_pct: parseFloat(cols[idx("voter_vote_pct")]),
+    voter_votes_usd: parseFloat(cols[idx("voter_votes_usd")]),
     fees_bribes_usd: parseFloat(cols[idx("fees_bribes_usd")]),
     fees_usd: parseFloat(cols[idx("fees_usd")]),
     bribes_usd: parseFloat(cols[idx("bribes_usd")]),
-    bribe_tokens: (cols[idx("bribe_tokens")] ?? "")
-      .split(";")
-      .filter(Boolean),
+    bribe_tokens: (cols[idx("bribe_tokens")] ?? "").split(";").filter(Boolean),
     fees_token0_usd: parseFloat(cols[idx("fees_token0_usd")]),
     token0: cols[idx("token0")],
     fees_token1_usd: parseFloat(cols[idx("fees_token1_usd")]),
     token1: cols[idx("token1")],
+    aero_usd: parseFloat(cols[idx("aero_usd")]),
     pool_address: cols[idx("pool_address")],
     voter_address: cols[idx("voter_address")] ?? "unknown",
   });
 }
 
-records.sort(
-  (a, b) => b.epoch_ts - a.epoch_ts || b.pool_votes - a.pool_votes
-);
+records.sort((a, b) => b.epoch_ts - a.epoch_ts || b.pool_votes - a.pool_votes);
 
 const voterAddress = records[0]?.voter_address ?? "unknown";
 
@@ -83,14 +81,12 @@ const escapeHtml = (s: string) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-const fmt = (n: number) =>
-  n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-const usdFmt = (n: number) =>
-  "$" +
+const fmt = (n: number, digits: number = 0) =>
   n.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
   });
+const usdFmt = (n: number, digits: number = 0) => "$" + fmt(n, digits);
 const tagSpans = (arr: string[]) =>
   arr.map((s) => `<span>${escapeHtml(s)}</span>`).join("");
 
@@ -114,13 +110,17 @@ for (let i = 0; i < sortedEpochs.length; i++) {
 
   const trueVotes = epochTotals.get(first.epoch_ts) ?? 0;
   const trueVoterVotes = voterVotesByEpoch.get(first.epoch_ts) ?? 0;
+  const aeroPrice = first.aero_usd ?? 0;
+  const trueVotesUsd = Math.round(trueVotes * aeroPrice * 100) / 100;
+  const trueVoterVotesUsd = Math.round(trueVoterVotes * aeroPrice * 100) / 100;
 
   const totalRow = `          <tr style="font-weight:600;background:#f0f0f0">
             <td></td>
             <td>TOTAL</td>
             <td class="right">${fmt(trueVotes)}</td>
-            <td></td>
+            <td class="right">${usdFmt(trueVotesUsd)}</td>
             <td class="right">${fmt(trueVoterVotes)}</td>
+            <td class="right">${usdFmt(trueVoterVotesUsd)}</td>
             <td></td>
             <td></td>
             <td></td>
@@ -139,9 +139,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td>${j + 1}</td>
             <td>${escapeHtml(r.pool_name)}</td>
             <td class="right">${fmt(r.pool_votes)}</td>
-            <td class="right">${r.pool_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.pool_votes_usd)}</td>
             <td class="right">${fmt(r.voter_votes)}</td>
-            <td class="right">${r.voter_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.voter_votes_usd)}</td>
             <td class="right">${usdFmt(r.fees_bribes_usd)}</td>
             <td class="right">${usdFmt(r.fees_usd)}</td>
             <td class="right">${usdFmt(r.bribes_usd)}</td>
@@ -150,6 +150,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td>${escapeHtml(r.token0)}</td>
             <td class="right">${usdFmt(r.fees_token1_usd)}</td>
             <td>${escapeHtml(r.token1)}</td>
+            <td class="right">${usdFmt(r.aero_usd, 4)}</td>
           </tr>`
     )
     .join("\n");
@@ -170,9 +171,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <th>#</th>
             <th>Pool</th>
             <th class="right">Pool Votes</th>
-            <th class="right">Pool Vote %</th>
+            <th class="right">Pool Votes (USD)</th>
             <th class="right">Voter Votes</th>
-            <th class="right">Voter Vote %</th>
+            <th class="right">Voter Votes (USD)</th>
             <th class="right">Fees + Bribes (USD)</th>
             <th class="right">Fees (USD)</th>
             <th class="right">Bribes (USD)</th>
@@ -181,6 +182,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <th>Token0</th>
             <th class="right">Fees Token1 (USD)</th>
             <th>Token1</th>
+            <th class="right">AERO (USD)</th>
           </tr>
         </thead>
         <tbody>
@@ -216,8 +218,8 @@ const html = `<!DOCTYPE html>
 <body>
   <h1>Aerodrome Votes \u2192 <a href="votes.csv">votes.csv</a></h1>
   <p style="font-size:.85rem;margin-bottom:1rem;color:#555">Voter: <code>${escapeHtml(
-  voterAddress
-)}</code></p>
+    voterAddress
+  )}</code></p>
 ${sections.join("\n")}
 </body>
 </html>`;

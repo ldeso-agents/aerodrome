@@ -7,6 +7,7 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 const LP_SUGAR = "0x3058f92ebf83e2536f2084f20f7c0357d7d3ccfe" as const;
 const REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678" as const;
 const VOTER = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5" as const;
+const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631" as const;
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
 const DEFAULT_VOTER_ADDRESS =
   "0xa79cd47655156b299762DFE92A67980805ce5a31" as const;
@@ -176,9 +177,9 @@ type EpochRecord = {
   pool_name: string;
   total_votes: number;
   pool_votes: number;
-  pool_vote_pct: number;
+  pool_votes_usd: number;
   voter_votes: number;
-  voter_vote_pct: number;
+  voter_votes_usd: number;
   fees_bribes_usd: number;
   fees_usd: number;
   bribes_usd: number;
@@ -187,6 +188,7 @@ type EpochRecord = {
   token0: string;
   fees_token1_usd: number;
   token1: string;
+  aero_usd: number;
   pool_address: string;
   voter_address: string;
 };
@@ -693,14 +695,9 @@ async function main() {
         pool_name: poolName(pool, tokens),
         total_votes: 0,
         pool_votes: Number(ep.votes) / 1e18,
-        pool_vote_pct: 0,
+        pool_votes_usd: 0,
         voter_votes: voterVotesForPool,
-        voter_vote_pct:
-          voterTotalForEpoch > 0
-            ? Math.round(
-                (voterVotesForPool / voterTotalForEpoch) * 100 * 10000
-              ) / 10000
-            : 0,
+        voter_votes_usd: 0,
         fees_bribes_usd: 0,
         fees_usd: 0,
         bribes_usd: 0,
@@ -709,6 +706,7 @@ async function main() {
         token0: tokens.get(pool.token0)?.symbol ?? "???",
         fees_token1_usd: 0,
         token1: tokens.get(pool.token1)?.symbol ?? "???",
+        aero_usd: 0,
         pool_address: ep.lp,
         voter_address: voterAddress,
       },
@@ -737,6 +735,16 @@ async function main() {
     >();
     for (const { record, fees, bribes } of entries) {
       const isCompleted = record.epoch_ts + WEEK <= nowTs;
+      // Ensure AERO price is fetched for every epoch (needed for vote USD columns)
+      {
+        let aeroEntry = needed.get(AERO);
+        if (!aeroEntry) {
+          aeroEntry = { dates: new Set(), completedDates: new Set() };
+          needed.set(AERO, aeroEntry);
+        }
+        aeroEntry.dates.add(record.price_date);
+        if (isCompleted) aeroEntry.completedDates.add(record.price_date);
+      }
       for (const r of [...fees, ...bribes]) {
         if (r.amount === 0n) continue;
         const addr = r.token.toLowerCase();
@@ -817,6 +825,12 @@ async function main() {
       );
       record.fees_bribes_usd =
         Math.round((record.fees_usd + record.bribes_usd) * 100) / 100;
+      const aeroPrice = priceMap.get(AERO)?.get(record.price_date) ?? 0;
+      record.aero_usd = aeroPrice;
+      record.pool_votes_usd =
+        Math.round(record.pool_votes * aeroPrice * 100) / 100;
+      record.voter_votes_usd =
+        Math.round(record.voter_votes * aeroPrice * 100) / 100;
     }
 
     // Save only completed-epoch prices
@@ -853,14 +867,9 @@ async function main() {
       epochTotals.set(ts, (epochTotals.get(ts) ?? 0) + Number(ep.votes) / 1e18);
     }
   }
-  console.log(`Computing vote percentages for ${epochTotals.size} epochs…`);
+  console.log(`Computing vote totals for ${epochTotals.size} epochs…`);
   for (const { record } of entries) {
-    const total = epochTotals.get(record.epoch_ts) ?? 0;
-    record.total_votes = total;
-    record.pool_vote_pct =
-      total > 0
-        ? Math.round((record.pool_votes / total) * 100 * 10000) / 10000
-        : 0;
+    record.total_votes = epochTotals.get(record.epoch_ts) ?? 0;
   }
 
   // 10. Compute epoch numbers
@@ -886,9 +895,9 @@ async function main() {
     "pool_name",
     "total_votes",
     "pool_votes",
-    "pool_vote_pct",
+    "pool_votes_usd",
     "voter_votes",
-    "voter_vote_pct",
+    "voter_votes_usd",
     "fees_bribes_usd",
     "fees_usd",
     "bribes_usd",
@@ -897,6 +906,7 @@ async function main() {
     "token0",
     "fees_token1_usd",
     "token1",
+    "aero_usd",
     "pool_address",
     "voter_address",
   ] as const;
