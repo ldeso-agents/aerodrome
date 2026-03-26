@@ -1,4 +1,4 @@
-import { createPublicClient, http, type Address } from "viem";
+import { createPublicClient, http, parseAbiItem, type Address } from "viem";
 import { base } from "viem/chains";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
@@ -6,7 +6,9 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 // https://github.com/velodrome-finance/sugar/blob/main/deployments/base.env
 const LP_SUGAR = "0x3058f92ebf83e2536f2084f20f7c0357d7d3ccfe" as const;
 const REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678" as const;
+const VOTER = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5" as const;
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
+const DEFAULT_VOTER_ADDRESS = "0xa79cd47655156b299762DFE92A67980805ce5a31" as const;
 
 const PAGE = 200;
 const WEEK = 7 * 24 * 3600;
@@ -143,6 +145,10 @@ const rewardsSugarAbi = [
   },
 ] as const;
 
+const votedEvent = parseAbiItem(
+  "event Voted(address indexed voter, address indexed pool, uint256 indexed tokenId, uint256 weight, uint256 totalWeight, uint256 timestamp)",
+);
+
 // -- Types --
 
 type PoolMeta = { symbol: string; type: number; token0: string; token1: string };
@@ -172,6 +178,8 @@ type EpochRecord = {
   bribes_usd: number;
   bribe_tokens: string[];
   epoch_number: number;
+  addr_votes: number;
+  addr_vote_pct: number;
 };
 type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd)
 
@@ -337,6 +345,8 @@ async function main() {
   const rpcUrl = process.env.BASE_RPC_URL;
   if (!rpcUrl) throw new Error("BASE_RPC_URL environment variable is required");
   const alchemyKey = process.env.ALCHEMY_API_KEY ?? "";
+  const voterAddress = (process.argv[2] ?? DEFAULT_VOTER_ADDRESS).toLowerCase() as Address;
+  console.log(`Tracking voter address: ${voterAddress}`);
 
   const client = createPublicClient({
     chain: base,
@@ -453,6 +463,43 @@ async function main() {
     `Selected ${new Set(selectedEntries.map((e) => e.lp)).size} unique pools across ${byEpoch.size} epochs (${selectedEntries.length} records)`,
   );
 
+  // 5b. Fetch Voted events for the tracked address
+  console.log(`Fetching voting history for ${voterAddress}…`);
+  const addrVotesByEpoch = new Map<number, Map<string, number>>(); // epoch_ts -> pool -> votes
+  {
+    const BLOCK_CHUNK = 5_000_000n;
+    const latestBlock = await client.getBlockNumber();
+    for (let fromBlock = 0n; fromBlock <= latestBlock; fromBlock += BLOCK_CHUNK) {
+      const toBlock = fromBlock + BLOCK_CHUNK - 1n > latestBlock ? latestBlock : fromBlock + BLOCK_CHUNK - 1n;
+      const logs = await client.getLogs({
+        address: VOTER,
+        event: votedEvent,
+        args: { voter: voterAddress },
+        fromBlock,
+        toBlock,
+      });
+      for (const log of logs) {
+        const pool = log.args.pool!.toLowerCase();
+        const weight = Number(log.args.weight!) / 1e18;
+        const ts = Number(log.args.timestamp!);
+        const epochTs = ts - (ts % WEEK);
+        let poolVotes = addrVotesByEpoch.get(epochTs);
+        if (!poolVotes) {
+          poolVotes = new Map();
+          addrVotesByEpoch.set(epochTs, poolVotes);
+        }
+        poolVotes.set(pool, (poolVotes.get(pool) ?? 0) + weight);
+      }
+      if (fromBlock === 0n) {
+        console.log(`  scanning blocks 0–${toBlock}…`);
+      }
+    }
+    const totalAddrVotes = [...addrVotesByEpoch.values()].reduce(
+      (n, m) => n + m.size, 0,
+    );
+    console.log(`  Found ${totalAddrVotes} pool-vote entries across ${addrVotesByEpoch.size} epochs`);
+  }
+
   // 6. Resolve missing token symbols via Alchemy
   if (alchemyKey) {
     const missingAddrs = new Set<string>();
@@ -488,6 +535,11 @@ async function main() {
     const pool = pools.get(lp);
     if (!pool) continue;
     const epochStartTs = Number(ep.ts);
+    const epochAddrVotes = addrVotesByEpoch.get(epochStartTs);
+    const addrVotesForPool = epochAddrVotes?.get(lp) ?? 0;
+    const addrTotalForEpoch = epochAddrVotes
+      ? [...epochAddrVotes.values()].reduce((a, b) => a + b, 0)
+      : 0;
     entries.push({
       record: {
         epoch_ts: epochStartTs,
@@ -507,6 +559,10 @@ async function main() {
         bribes_usd: 0,
         bribe_tokens: rewardTokenSymbols(ep.bribes, tokens),
         epoch_number: 0,
+        addr_votes: addrVotesForPool,
+        addr_vote_pct: addrTotalForEpoch > 0
+          ? Math.round((addrVotesForPool / addrTotalForEpoch) * 100 * 10000) / 10000
+          : 0,
       },
       fees: ep.fees,
       bribes: ep.bribes,
@@ -677,6 +733,8 @@ async function main() {
             <td>${escapeHtml(r.token1)}</td>
             <td class="right">${usdFmt(r.bribes_usd)}</td>
             <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
+            <td class="right">${fmt(r.addr_votes)}</td>
+            <td class="right">${r.addr_vote_pct.toFixed(2)}%</td>
           </tr>`,
         )
         .join("\n");
@@ -698,6 +756,8 @@ async function main() {
             <th>Token1</th>
             <th class="right">Bribes (USD)</th>
             <th>Bribe Tokens</th>
+            <th class="right">Addr Votes</th>
+            <th class="right">Addr Vote %</th>
           </tr>
         </thead>
         <tbody>
@@ -731,6 +791,7 @@ async function main() {
 </head>
 <body>
   <h1>Aerodrome Votes (as of ${new Date().toISOString().replace("T", " ").replace(/:\d{2}\.\d+Z$/, " UTC")}) → <a href="votes.csv">votes.csv</a></h1>
+  <p style="font-size:.85rem;margin-bottom:1rem;color:#555">Voter: <code>${escapeHtml(voterAddress)}</code></p>
 ${sections.join("\n")}
 </body>
 </html>`;
@@ -752,6 +813,8 @@ ${sections.join("\n")}
     "bribes_usd",
     "bribe_tokens",
     "pool_address",
+    "addr_votes",
+    "addr_vote_pct",
   ] as const;
 
   const csvLines = [fields.join(",")];
