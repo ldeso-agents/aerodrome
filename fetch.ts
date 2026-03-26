@@ -467,57 +467,106 @@ async function main() {
   console.log(`Fetching voting history for ${voterAddress}…`);
   const addrVotesByEpoch = new Map<number, Map<string, number>>(); // epoch_ts -> pool -> votes
   {
-    const BLOCK_CHUNK = 10_000n;
-    const BATCH_CONCURRENCY = 10;
-    const latestBlock = await client.getBlockNumber();
+    const nowTs = Math.floor(Date.now() / 1000);
 
-    // Aerodrome Voter contract deployment block on Base
-    const startBlock = 3_022_926n;
-
-    const totalChunks = Number((latestBlock - startBlock) / BLOCK_CHUNK) + 1;
-    let processed = 0;
-    console.log(`  scanning blocks ${startBlock}–${latestBlock} (${totalChunks} chunks)…`);
-
-    for (let batchStart = startBlock; batchStart <= latestBlock; batchStart += BLOCK_CHUNK * BigInt(BATCH_CONCURRENCY)) {
-      const batch: Promise<any[]>[] = [];
-      for (let i = 0; i < BATCH_CONCURRENCY; i++) {
-        const from = batchStart + BLOCK_CHUNK * BigInt(i);
-        if (from > latestBlock) break;
-        const to = from + BLOCK_CHUNK - 1n > latestBlock ? latestBlock : from + BLOCK_CHUNK - 1n;
-        batch.push(
-          client.getLogs({
-            address: VOTER,
-            event: votedEvent,
-            args: { voter: voterAddress },
-            fromBlock: from,
-            toBlock: to,
-          }),
-        );
-      }
-      const results = await Promise.all(batch);
-      for (const logs of results) {
-        for (const log of logs) {
-          const pool = log.args.pool!.toLowerCase();
-          const weight = Number(log.args.weight!) / 1e18;
-          const ts = Number(log.args.timestamp!);
-          const epochTs = ts - (ts % WEEK);
+    // Load cached addr votes from votes.csv for completed epochs
+    const cachedEpochs = new Set<number>();
+    if (existsSync("votes.csv")) {
+      const lines = readFileSync("votes.csv", "utf-8").trimEnd().split("\n");
+      const header = lines[0].split(",");
+      const iDate = header.indexOf("epoch_date");
+      const iPool = header.indexOf("pool_address");
+      const iAddrVotes = header.indexOf("addr_votes");
+      if (iDate >= 0 && iPool >= 0 && iAddrVotes >= 0) {
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(",");
+          const epochDate = cols[iDate];
+          const pool = cols[iPool]?.toLowerCase();
+          const addrVotes = parseFloat(cols[iAddrVotes]);
+          if (!epochDate || !pool || isNaN(addrVotes)) continue;
+          const epochTs = Math.floor(new Date(epochDate + "T00:00:00Z").getTime() / 1000);
+          const isCompleted = epochTs + WEEK <= nowTs;
+          if (!isCompleted) continue;
           let poolVotes = addrVotesByEpoch.get(epochTs);
           if (!poolVotes) {
             poolVotes = new Map();
             addrVotesByEpoch.set(epochTs, poolVotes);
           }
-          poolVotes.set(pool, (poolVotes.get(pool) ?? 0) + weight);
+          if (addrVotes > 0) poolVotes.set(pool, addrVotes);
+          cachedEpochs.add(epochTs);
         }
-        processed++;
-      }
-      if (processed % 200 === 0) {
-        console.log(`  ${processed}/${totalChunks} chunks scanned…`);
+        console.log(`  Loaded cached addr votes for ${cachedEpochs.size} completed epochs from votes.csv`);
       }
     }
+
+    // Determine earliest uncached epoch to narrow the block scan range
+    const allEpochTimestamps = [...byEpoch.keys()];
+    const uncachedEpochs = allEpochTimestamps.filter((ts) => !cachedEpochs.has(ts));
+
+    if (uncachedEpochs.length > 0) {
+      const BLOCK_CHUNK = 10_000n;
+      const BATCH_CONCURRENCY = 10;
+      const latestBlock = await client.getBlockNumber();
+      const latestBlockData = await client.getBlock({ blockNumber: latestBlock });
+
+      // Estimate start block from earliest uncached epoch (~2s/block on Base)
+      const earliestUncachedTs = Math.min(...uncachedEpochs);
+      const secsBack = Number(latestBlockData.timestamp) - earliestUncachedTs;
+      const blocksBack = BigInt(Math.ceil(secsBack / 2) + 50_000); // buffer
+      const estimatedStart = latestBlock > blocksBack ? latestBlock - blocksBack : 0n;
+      // Never go below Voter contract deployment block
+      const startBlock = estimatedStart > 3_022_926n ? estimatedStart : 3_022_926n;
+
+      const totalChunks = Number((latestBlock - startBlock) / BLOCK_CHUNK) + 1;
+      let processed = 0;
+      console.log(`  ${uncachedEpochs.length} uncached epochs, scanning blocks ${startBlock}–${latestBlock} (${totalChunks} chunks)…`);
+
+      for (let batchStart = startBlock; batchStart <= latestBlock; batchStart += BLOCK_CHUNK * BigInt(BATCH_CONCURRENCY)) {
+        const batch: Promise<any[]>[] = [];
+        for (let i = 0; i < BATCH_CONCURRENCY; i++) {
+          const from = batchStart + BLOCK_CHUNK * BigInt(i);
+          if (from > latestBlock) break;
+          const to = from + BLOCK_CHUNK - 1n > latestBlock ? latestBlock : from + BLOCK_CHUNK - 1n;
+          batch.push(
+            client.getLogs({
+              address: VOTER,
+              event: votedEvent,
+              args: { voter: voterAddress },
+              fromBlock: from,
+              toBlock: to,
+            }),
+          );
+        }
+        const results = await Promise.all(batch);
+        for (const logs of results) {
+          for (const log of logs) {
+            const pool = log.args.pool!.toLowerCase();
+            const weight = Number(log.args.weight!) / 1e18;
+            const ts = Number(log.args.timestamp!);
+            const epochTs = ts - (ts % WEEK);
+            // Skip events for epochs already loaded from cache
+            if (cachedEpochs.has(epochTs)) continue;
+            let poolVotes = addrVotesByEpoch.get(epochTs);
+            if (!poolVotes) {
+              poolVotes = new Map();
+              addrVotesByEpoch.set(epochTs, poolVotes);
+            }
+            poolVotes.set(pool, (poolVotes.get(pool) ?? 0) + weight);
+          }
+          processed++;
+        }
+        if (processed % 200 === 0) {
+          console.log(`  ${processed}/${totalChunks} chunks scanned…`);
+        }
+      }
+    } else {
+      console.log(`  All epochs cached, skipping block scan`);
+    }
+
     const totalAddrVotes = [...addrVotesByEpoch.values()].reduce(
       (n, m) => n + m.size, 0,
     );
-    console.log(`  Found ${totalAddrVotes} pool-vote entries across ${addrVotesByEpoch.size} epochs`);
+    console.log(`  ${totalAddrVotes} pool-vote entries across ${addrVotesByEpoch.size} epochs`);
   }
 
   // 6. Resolve missing token symbols via Alchemy
