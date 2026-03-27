@@ -347,21 +347,43 @@ async function main() {
     `  ${latestEpochs.length} epochs fetched, ${votedPools.length} pools with votes`
   );
 
-  // 4. Fetch ALL historical epochs for every voted pool
+  // 4. Fetch ALL historical epochs for every voted pool + voter's pools from cache
+  const voterPoolsFromCache = new Set<string>();
+  if (existsSync("votes.csv")) {
+    const lines = readFileSync("votes.csv", "utf-8").trimEnd().split("\n");
+    const header = lines[0].split(",");
+    const idx = (name: string) => header.indexOf(name);
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i]
+        .split(",")
+        .map((v) => v.replace(/^"(.*)"$/, "$1"));
+      const voterAddr = cols[idx("voter_address")];
+      const voterVotes = parseFloat(cols[idx("voter_votes")]);
+      const pool = cols[idx("pool_address")]?.toLowerCase();
+      if (voterAddr === voterAddress && pool && voterVotes > 0) {
+        voterPoolsFromCache.add(pool);
+      }
+    }
+  }
+
   console.log("Fetching historical epochs for all voted pools…");
   const allEpochs = new Map<string, RawEpoch[]>();
-  for (const { lp } of votedPools) {
-    const addr = lp.toLowerCase();
+  const poolsToFetch = new Set<string>(
+    votedPools.map(({ lp }) => lp.toLowerCase())
+  );
+  for (const addr of voterPoolsFromCache) poolsToFetch.add(addr);
+
+  for (const addr of poolsToFetch) {
     if (allEpochs.has(addr)) continue;
     const poolEpochs = await fetchAllPages<RawEpoch>(client, {
       address: REWARDS_SUGAR,
       abi: rewardsSugarAbi,
       functionName: "epochsByAddress",
-      extraArgs: [lp],
+      extraArgs: [addr as Address],
     });
     allEpochs.set(addr, poolEpochs);
     const pool = pools.get(addr);
-    const label = pool ? poolName(pool, tokens) : lp;
+    const label = pool ? poolName(pool, tokens) : addr;
     console.log(`  ${label}: ${poolEpochs.length} epochs`);
   }
 
