@@ -484,7 +484,7 @@ async function main() {
         }
       }
     } else {
-      console.log(`  All epochs cached, skipping block scan`);
+      console.log("  All epochs cached, skipping block scan");
     }
 
     const totalVoterVotes = [...voterVotesByEpoch.values()].reduce(
