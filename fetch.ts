@@ -66,9 +66,9 @@ type EpochRecord = {
   pool_type: PoolType;
   total_votes: number;
   pool_votes: number;
-  pool_votes_usd: number;
+  pool_vote_pct: number;
   voter_votes: number;
-  voter_votes_usd: number;
+  voter_vote_pct: number;
   fees_bribes_usd: number;
   fees_usd: number;
   bribes_usd: number;
@@ -399,13 +399,14 @@ async function main() {
     const cachedEpochs = new Set<number>();
     if (existsSync("votes.csv")) {
       const lines = readFileSync("votes.csv", "utf-8").trimEnd().split("\n");
+      const header = lines[0].split(",");
+      const idx = (name: string) => header.indexOf(name);
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(",").map(v => v.replace(/^"(.*)"$/, "$1"));
-        // CSV columns: epoch_number,epoch_date,pool_name,pool_type,...,pool_address,voter_address
-        const epochDate = cols[1];
-        const pool = cols[18]?.toLowerCase();
-        const voterVotes = parseFloat(cols[7]);
-        const voterAddr = cols[19];
+        const epochDate = cols[idx("epoch_date")];
+        const pool = cols[idx("pool_address")]?.toLowerCase();
+        const voterVotes = parseFloat(cols[idx("voter_votes")]);
+        const voterAddr = cols[idx("voter_address")];
         if (voterAddr !== voterAddress) continue;
         if (!epochDate || !pool || isNaN(voterVotes)) continue;
         const epochTs = Math.floor(
@@ -561,6 +562,9 @@ async function main() {
     const epochStartTs = Number(ep.ts);
     const epochVoterVotes = voterVotesByEpoch.get(epochStartTs);
     const voterVotesForPool = epochVoterVotes?.get(lp) ?? 0;
+    const voterTotalForEpoch = epochVoterVotes
+      ? [...epochVoterVotes.values()].reduce((a, b) => a + b, 0)
+      : 0;
     entries.push({
       record: {
         epoch_ts: epochStartTs,
@@ -574,9 +578,14 @@ async function main() {
         pool_type: "other",
         total_votes: 0,
         pool_votes: Number(ep.votes) / 1e18,
-        pool_votes_usd: 0,
+        pool_vote_pct: 0,
         voter_votes: voterVotesForPool,
-        voter_votes_usd: 0,
+        voter_vote_pct:
+          voterTotalForEpoch > 0
+            ? Math.round(
+                (voterVotesForPool / voterTotalForEpoch) * 100 * 10000
+              ) / 10000
+            : 0,
         fees_bribes_usd: 0,
         fees_usd: 0,
         bribes_usd: 0,
@@ -697,10 +706,6 @@ async function main() {
         Math.round((record.fees_usd + record.bribes_usd) * 100) / 100;
       const aeroPrice = priceMap.get(AERO)?.get(record.price_date) ?? 0;
       record.aero_usd = aeroPrice;
-      record.pool_votes_usd =
-        Math.round(record.pool_votes * aeroPrice * 100) / 100;
-      record.voter_votes_usd =
-        Math.round(record.voter_votes * aeroPrice * 100) / 100;
     }
 
     // Save only completed-epoch prices
@@ -737,9 +742,14 @@ async function main() {
       epochTotals.set(ts, (epochTotals.get(ts) ?? 0) + Number(ep.votes) / 1e18);
     }
   }
-  console.log(`Computing vote totals for ${epochTotals.size} epochs…`);
+  console.log(`Computing vote percentages for ${epochTotals.size} epochs…`);
   for (const { record } of entries) {
-    record.total_votes = epochTotals.get(record.epoch_ts) ?? 0;
+    const total = epochTotals.get(record.epoch_ts) ?? 0;
+    record.total_votes = total;
+    record.pool_vote_pct =
+      total > 0
+        ? Math.round((record.pool_votes / total) * 100 * 10000) / 10000
+        : 0;
   }
 
   // 10. Compute epoch numbers
@@ -815,9 +825,9 @@ async function main() {
     "pool_type",
     "total_votes",
     "pool_votes",
-    "pool_votes_usd",
+    "pool_vote_pct",
     "voter_votes",
-    "voter_votes_usd",
+    "voter_vote_pct",
     "fees_bribes_usd",
     "fees_usd",
     "bribes_usd",

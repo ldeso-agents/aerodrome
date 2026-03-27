@@ -10,9 +10,9 @@ type EpochRecord = {
   pool_type: string;
   total_votes: number;
   pool_votes: number;
-  pool_votes_usd: number;
+  pool_vote_pct: number;
   voter_votes: number;
-  voter_votes_usd: number;
+  voter_vote_pct: number;
   fees_bribes_usd: number;
   fees_usd: number;
   bribes_usd: number;
@@ -76,9 +76,9 @@ for (let i = 1; i < lines.length; i++) {
     pool_type: c[idx("pool_type")],
     total_votes: parseFloat(c[idx("total_votes")]),
     pool_votes: parseFloat(c[idx("pool_votes")]),
-    pool_votes_usd: parseFloat(c[idx("pool_votes_usd")]),
+    pool_vote_pct: parseFloat(c[idx("pool_vote_pct")]),
     voter_votes: parseFloat(c[idx("voter_votes")]),
-    voter_votes_usd: parseFloat(c[idx("voter_votes_usd")]),
+    voter_vote_pct: parseFloat(c[idx("voter_vote_pct")]),
     fees_bribes_usd: parseFloat(c[idx("fees_bribes_usd")]),
     fees_usd: parseFloat(c[idx("fees_usd")]),
     bribes_usd: parseFloat(c[idx("bribes_usd")]),
@@ -129,18 +129,15 @@ for (let i = 0; i < sortedEpochs.length; i++) {
 
   const trueVotes = epochTotals.get(first.epoch_ts) ?? 0;
   const trueVoterVotes = voterVotesByEpoch.get(first.epoch_ts) ?? 0;
-  const aeroPrice = first.aero_usd ?? 0;
-  const trueVotesUsd = Math.round(trueVotes * aeroPrice * 100) / 100;
-  const trueVoterVotesUsd = Math.round(trueVoterVotes * aeroPrice * 100) / 100;
 
   const totalRow = `          <tr style="font-weight:600;background:#f0f0f0">
             <td></td>
             <td>TOTAL</td>
             <td></td>
             <td class="right">${fmt(trueVotes)}</td>
-            <td class="right">${usdFmt(trueVotesUsd)}</td>
+            <td></td>
             <td class="right">${fmt(trueVoterVotes)}</td>
-            <td class="right">${usdFmt(trueVoterVotesUsd)}</td>
+            <td></td>
             <td></td>
             <td></td>
             <td></td>
@@ -164,12 +161,12 @@ for (let i = 0; i < sortedEpochs.length; i++) {
         poolTypeLabel[r.pool_type] ? poolTypeLabel[r.pool_type] : ""
       }</td>
             <td${background} class="right">${fmt(r.pool_votes)}</td>
-            <td${background} class="right">${usdFmt(r.pool_votes_usd)}</td>
+            <td${background} class="right">${r.pool_vote_pct.toFixed(2)}%</td>
             <td${background} class="right">${fmt(r.voter_votes)}</td>
-            <td${background} class="right">${usdFmt(r.voter_votes_usd)}</td>
+            <td${background} class="right">${r.voter_vote_pct.toFixed(2)}%</td>
             <td${background} class="right">${usdFmt(r.fees_bribes_usd)}</td>
-            <td class="right">${usdFmt(r.fees_usd)}</td>
-            <td class="right">${usdFmt(r.bribes_usd)}</td>
+            <td${background} class="right">${usdFmt(r.fees_usd)}</td>
+            <td${background} class="right">${usdFmt(r.bribes_usd)}</td>
             <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
             <td class="right">${usdFmt(r.fees_token0_usd)}</td>
             <td>${escapeHtml(r.token0)}</td>
@@ -197,9 +194,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <th>Pool</th>
             <th>Type</th>
             <th class="right">Pool Votes</th>
-            <th class="right">Pool Votes (USD)</th>
+            <th class="right">Pool Vote %</th>
             <th class="right">Voter Votes</th>
-            <th class="right">Voter Votes (USD)</th>
+            <th class="right">Voter Vote %</th>
             <th class="right">Fees + Bribes (USD)</th>
             <th class="right">Fees (USD)</th>
             <th class="right">Bribes (USD)</th>
