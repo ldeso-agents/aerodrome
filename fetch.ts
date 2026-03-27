@@ -471,7 +471,7 @@ async function main() {
     } records)`
   );
 
-  // 8. Resolve missing token symbols via Alchemy
+  // 7. Resolve missing token symbols via Alchemy
   if (alchemyKey) {
     const missingAddrs = new Set<string>();
     for (const { lp } of selectedEntries) {
@@ -509,7 +509,7 @@ async function main() {
     }
   }
 
-  // 9. Build entry records from selected pools (top 30 + voter-voted)
+  // 8. Build entry records from selected pools
   const entries: {
     record: EpochRecord;
     fees: RawReward;
@@ -566,7 +566,7 @@ async function main() {
     });
   }
 
-  // 10. Fetch token prices and compute USD values
+  // 9. Fetch token prices and compute USD values
   const cachedPrices = loadPricesCsv();
   const cachedPriceCount = [...cachedPrices.values()].reduce(
     (n, m) => n + m.size,
@@ -695,7 +695,7 @@ async function main() {
     console.log("ALCHEMY_API_KEY not set, skipping USD price computation");
   }
 
-  // 11. Compute vote percentages per epoch (using all fetched epoch data)
+  // 10. Compute vote percentages per epoch (using all fetched epoch data)
   const epochTotals = new Map<number, number>();
   for (const [, epochs] of allEpochs) {
     for (const ep of epochs) {
@@ -713,7 +713,7 @@ async function main() {
         : 0;
   }
 
-  // 12. Compute epoch numbers
+  // 11. Compute epoch numbers
   const records = entries.map((e) => e.record);
   const epochTimestamps = [...new Set(records.map((r) => r.epoch_ts))].sort(
     (a, b) => a - b
@@ -725,7 +725,7 @@ async function main() {
     }
   }
 
-  // 13. Classify pool types
+  // 12. Classify pool types
   {
     // Build map of token address -> earliest epoch timestamp
     const tokenFirstEpoch = new Map<string, number>();
@@ -778,7 +778,7 @@ async function main() {
     (a, b) => b.epoch_ts - a.epoch_ts || b.pool_votes - a.pool_votes
   );
 
-  // 14. Write votes.csv
+  // 13. Write votes.csv
   const fields = [
     "epoch_number",
     "epoch_date",
