@@ -386,7 +386,7 @@ async function main() {
       new Set(selectedEntries.map((e) => e.lp)).size
     } unique pools across ${byEpoch.size} epochs (${
       selectedEntries.length
-    } records)`
+    } records) (top 30 per epoch)`
   );
 
   // 6. Fetch Voted events for the tracked address
@@ -512,6 +512,34 @@ async function main() {
     );
   }
 
+  // 6b. Include all pools the voter voted for, even if outside top 30
+  {
+    const selectedSet = new Set(
+      selectedEntries.map((e) => `${e.ts}:${e.lp}`)
+    );
+    let added = 0;
+    for (const [epochTs, poolVotes] of voterVotesByEpoch) {
+      const bucket = byEpoch.get(epochTs);
+      if (!bucket) continue;
+      for (const [pool] of poolVotes) {
+        const key = `${epochTs}:${pool}`;
+        if (selectedSet.has(key)) continue;
+        const entry = bucket.find((b) => b.lp === pool);
+        if (!entry) continue;
+        selectedEntries.push({ ts: epochTs, lp: pool, ep: entry.ep });
+        selectedSet.add(key);
+        added++;
+      }
+    }
+    if (added > 0) {
+      console.log(
+        `Added ${added} voter-voted pool entries outside top 30 (${
+          new Set(selectedEntries.map((e) => e.lp)).size
+        } unique pools total)`
+      );
+    }
+  }
+
   // 7. Resolve missing token symbols via Alchemy
   if (alchemyKey) {
     const missingAddrs = new Set<string>();
@@ -550,7 +578,7 @@ async function main() {
     }
   }
 
-  // 8. Build entry records from selected per-epoch top 30
+  // 8. Build entry records from selected pools (top 30 + voter-voted)
   const entries: {
     record: EpochRecord;
     fees: RawReward;
