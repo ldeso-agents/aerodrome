@@ -56,12 +56,14 @@ type RawEpoch = {
   bribes: RawReward;
   fees: RawReward;
 };
+type PoolType = "stablecoin" | "bluechip" | "aero" | "new" | "other";
 type EpochRecord = {
   epoch_ts: number;
   epoch_number: number;
   epoch_date: string;
   price_date: string;
   pool_name: string;
+  pool_type: PoolType;
   total_votes: number;
   pool_votes: number;
   pool_votes_usd: number;
@@ -144,6 +146,10 @@ async function fetchAllPages<T>(
   }
   return results;
 }
+
+const isStablecoin = (symbol: string) => /USD|EUR/i.test(symbol);
+const isBluechip = (symbol: string) => /ETH|BTC/i.test(symbol);
+const isAero = (symbol: string) => symbol === "AERO";
 
 /** Build a human-readable pool name. CL pools have empty symbol in Sugar. */
 function poolName(pool: PoolMeta, tokenMap: Map<string, TokenMeta>): string {
@@ -395,11 +401,11 @@ async function main() {
       const lines = readFileSync("votes.csv", "utf-8").trimEnd().split("\n");
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(",");
-        // CSV columns: epoch_number,epoch_date,pool_name,...,pool_address,voter_address
+        // CSV columns: epoch_number,epoch_date,pool_name,pool_type,...,pool_address,voter_address
         const epochDate = cols[1];
-        const pool = cols[17]?.toLowerCase();
-        const voterVotes = parseFloat(cols[6]);
-        const voterAddr = cols[18];
+        const pool = cols[18]?.toLowerCase();
+        const voterVotes = parseFloat(cols[7]);
+        const voterAddr = cols[19];
         if (voterAddr !== voterAddress) continue;
         if (!epochDate || !pool || isNaN(voterVotes)) continue;
         const epochTs = Math.floor(
@@ -565,6 +571,7 @@ async function main() {
             ? new Date().toISOString().slice(0, 10)
             : new Date((epochStartTs + WEEK) * 1000).toISOString().slice(0, 10),
         pool_name: poolName(pool, tokens),
+        pool_type: "other",
         total_votes: 0,
         pool_votes: Number(ep.votes) / 1e18,
         pool_votes_usd: 0,
@@ -747,15 +754,65 @@ async function main() {
     }
   }
 
+  // 11. Classify pool types
+  {
+    // Build map of token address -> earliest epoch timestamp
+    const tokenFirstEpoch = new Map<string, number>();
+    for (const [lp, epochs] of allEpochs) {
+      const pool = pools.get(lp);
+      if (!pool) continue;
+      for (const ep of epochs) {
+        const ts = Number(ep.ts);
+        for (const addr of [pool.token0, pool.token1]) {
+          const prev = tokenFirstEpoch.get(addr);
+          if (prev === undefined || ts < prev) tokenFirstEpoch.set(addr, ts);
+        }
+      }
+    }
+
+    for (const { record, pool_token0, pool_token1 } of entries) {
+      const sym0 = record.token0;
+      const sym1 = record.token1;
+      const s0 = isStablecoin(sym0);
+      const s1 = isStablecoin(sym1);
+      const b0 = isBluechip(sym0);
+      const b1 = isBluechip(sym1);
+      const a0 = isAero(sym0);
+      const a1 = isAero(sym1);
+
+      if (s0 && s1) {
+        record.pool_type = "stablecoin";
+      } else if ((b0 && (b1 || s1)) || (b1 && (b0 || s0))) {
+        record.pool_type = "bluechip";
+      } else if ((a0 && (b1 || s1)) || (a1 && (b0 || s0))) {
+        record.pool_type = "aero";
+      } else {
+        // Check if either token is "new" (first appeared within last 4 epochs)
+        const threshold = record.epoch_ts - 3 * WEEK;
+        const first0 = tokenFirstEpoch.get(pool_token0);
+        const first1 = tokenFirstEpoch.get(pool_token1);
+        if (
+          (first0 !== undefined && first0 >= threshold) ||
+          (first1 !== undefined && first1 >= threshold)
+        ) {
+          record.pool_type = "new";
+        } else {
+          record.pool_type = "other";
+        }
+      }
+    }
+  }
+
   records.sort(
     (a, b) => b.epoch_ts - a.epoch_ts || b.pool_votes - a.pool_votes
   );
 
-  // 11. Write votes.csv
+  // 12. Write votes.csv
   const fields = [
     "epoch_number",
     "epoch_date",
     "pool_name",
+    "pool_type",
     "total_votes",
     "pool_votes",
     "pool_votes_usd",

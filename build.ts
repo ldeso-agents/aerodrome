@@ -7,6 +7,7 @@ type EpochRecord = {
   epoch_number: number;
   epoch_date: string;
   pool_name: string;
+  pool_type: string;
   total_votes: number;
   pool_votes: number;
   pool_votes_usd: number;
@@ -42,6 +43,19 @@ const usdFmt = (n: number, digits: number = 0) => "$" + fmt(n, digits);
 const tagSpans = (arr: string[]) =>
   arr.map((s) => `<span>${escapeHtml(s)}</span>`).join("");
 
+const poolTypeLabel: Record<string, string> = {
+  bluechip: "blue chip",
+  stablecoin: "stable",
+  aero: "aero",
+  new: "new",
+};
+const poolTypeBg: Record<string, string> = {
+  bluechip: "#eef4ff",
+  stablecoin: "#efefef",
+  aero: "#ffedeb",
+  new: "#e6f4ea",
+};
+
 // -- Main --
 
 // 1. Parse votes.csv
@@ -59,6 +73,7 @@ for (let i = 1; i < lines.length; i++) {
     epoch_number: parseInt(c[idx("epoch_number")]),
     epoch_date: epochDate,
     pool_name: c[idx("pool_name")],
+    pool_type: c[idx("pool_type")],
     total_votes: parseFloat(c[idx("total_votes")]),
     pool_votes: parseFloat(c[idx("pool_votes")]),
     pool_votes_usd: parseFloat(c[idx("pool_votes_usd")]),
@@ -121,6 +136,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
   const totalRow = `          <tr style="font-weight:600;background:#f0f0f0">
             <td></td>
             <td>TOTAL</td>
+            <td></td>
             <td class="right">${fmt(trueVotes)}</td>
             <td class="right">${usdFmt(trueVotesUsd)}</td>
             <td class="right">${fmt(trueVoterVotes)}</td>
@@ -137,16 +153,21 @@ for (let i = 0; i < sortedEpochs.length; i++) {
           </tr>`;
 
   const rows = epochRecords
-    .map(
-      (r, j) =>
-        `          <tr>
+    .map((r, j) => {
+      const background = poolTypeBg[r.pool_type]
+        ? ` style="background:${poolTypeBg[r.pool_type]}"`
+        : "";
+      return `        <tr>
             <td>${j + 1}</td>
-            <td>${escapeHtml(r.pool_name)}</td>
-            <td class="right">${fmt(r.pool_votes)}</td>
-            <td class="right">${usdFmt(r.pool_votes_usd)}</td>
-            <td class="right">${fmt(r.voter_votes)}</td>
-            <td class="right">${usdFmt(r.voter_votes_usd)}</td>
-            <td class="right">${usdFmt(r.fees_bribes_usd)}</td>
+            <td${background}>${escapeHtml(r.pool_name)}</td>
+            <td${background}>${
+        poolTypeLabel[r.pool_type] ? poolTypeLabel[r.pool_type] : ""
+      }</td>
+            <td${background} class="right">${fmt(r.pool_votes)}</td>
+            <td${background} class="right">${usdFmt(r.pool_votes_usd)}</td>
+            <td${background} class="right">${fmt(r.voter_votes)}</td>
+            <td${background} class="right">${usdFmt(r.voter_votes_usd)}</td>
+            <td${background} class="right">${usdFmt(r.fees_bribes_usd)}</td>
             <td class="right">${usdFmt(r.fees_usd)}</td>
             <td class="right">${usdFmt(r.bribes_usd)}</td>
             <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
@@ -155,11 +176,11 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td class="right">${usdFmt(r.fees_token1_usd)}</td>
             <td>${escapeHtml(r.token1)}</td>
             <td class="right">${usdFmt(r.aero_usd, 4)}</td>
-          </tr>`
-    )
+          </tr>`;
+    })
     .join("\n");
 
-  sections.push(`  <details${i === 0 ? " open" : ""}>
+  sections.push(`  <details${i === 0 ? "" : " open"}>
     <summary>Epoch ${first.epoch_number} \u2013 ${first.epoch_date}${
     i === 0
       ? ` (current epoch as of ${new Date()
@@ -174,6 +195,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
           <tr>
             <th>#</th>
             <th>Pool</th>
+            <th>Type</th>
             <th class="right">Pool Votes</th>
             <th class="right">Pool Votes (USD)</th>
             <th class="right">Voter Votes</th>
