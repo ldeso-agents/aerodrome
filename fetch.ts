@@ -385,15 +385,11 @@ async function main() {
       );
     }
 
-    // Determine earliest uncached epoch to narrow the block scan range
-    const allEpochTimestamps = new Set(
-      latestEpochs.map((e) => Number(e.ts))
-    );
-    const uncachedEpochs = [...allEpochTimestamps].filter(
-      (ts) => !cachedEpochs.has(ts)
-    );
+    // Scan for voter votes from the end of the latest cached epoch onward
+    const latestCachedTs =
+      cachedEpochs.size > 0 ? Math.max(...cachedEpochs) + WEEK : 0;
 
-    if (uncachedEpochs.length > 0) {
+    if (latestCachedTs < Math.floor(Date.now() / 1000)) {
       const BLOCK_CHUNK = 10_000n;
       const BATCH_CONCURRENCY = 10;
       const latestBlock = await client.getBlockNumber();
@@ -401,9 +397,8 @@ async function main() {
         blockNumber: latestBlock,
       });
 
-      // Estimate start block from earliest uncached epoch (~2s/block on Base)
-      const earliestUncachedTs = Math.min(...uncachedEpochs);
-      const secsBack = Number(latestBlockData.timestamp) - earliestUncachedTs;
+      // Estimate start block from end of latest cached epoch (~2s/block on Base)
+      const secsBack = Number(latestBlockData.timestamp) - latestCachedTs;
       const blocksBack = BigInt(Math.ceil(secsBack / 2) + 50_000);
       const estimatedStart =
         latestBlock > blocksBack ? latestBlock - blocksBack : 0n;
@@ -413,7 +408,7 @@ async function main() {
       const totalChunks = Number((latestBlock - startBlock) / BLOCK_CHUNK) + 1;
       let processed = 0;
       console.log(
-        `  ${uncachedEpochs.length} uncached epochs, scanning blocks ${startBlock}–${latestBlock} (${totalChunks} chunks)…`
+        `  Scanning blocks ${startBlock}–${latestBlock} (${totalChunks} chunks) for voter events…`
       );
 
       for (
