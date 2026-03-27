@@ -177,7 +177,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
     })
     .join("\n");
 
-  sections.push(`  <details${i === 0 ? "" : " open"}>
+  sections.push(`  <details${i < 2 ? " open" : ""}>
     <summary>Epoch ${first.epoch_number} \u2013 ${first.epoch_date}${
     i === 0
       ? ` (current epoch as of ${new Date()
