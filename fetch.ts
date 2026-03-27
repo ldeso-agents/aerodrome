@@ -400,7 +400,7 @@ async function main() {
     if (existsSync("votes.csv")) {
       const lines = readFileSync("votes.csv", "utf-8").trimEnd().split("\n");
       for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(",");
+        const cols = lines[i].split(",").map(v => v.replace(/^"(.*)"$/, "$1"));
         // CSV columns: epoch_number,epoch_date,pool_name,pool_type,...,pool_address,voter_address
         const epochDate = cols[1];
         const pool = cols[18]?.toLowerCase();
@@ -838,7 +838,7 @@ async function main() {
         .map((f) => {
           const v = r[f];
           if (Array.isArray(v)) return v.join(";");
-          if (typeof v === "string" && v.includes(",")) return `"${v}"`;
+          if (typeof v === "string") return `"${v}"`;
           return String(v);
         })
         .join(",")

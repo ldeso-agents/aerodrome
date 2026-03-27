@@ -66,7 +66,7 @@ const idx = (name: string) => header.indexOf(name);
 
 const records: EpochRecord[] = [];
 for (let i = 1; i < lines.length; i++) {
-  const c = lines[i].split(",");
+  const c = lines[i].split(",").map(v => v.replace(/^"(.*)"$/, "$1"));
   const epochDate = c[idx("epoch_date")];
   records.push({
     epoch_ts: Math.floor(new Date(epochDate + "T00:00:00Z").getTime() / 1000),
