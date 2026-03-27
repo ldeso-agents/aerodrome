@@ -365,29 +365,13 @@ async function main() {
     console.log(`  ${label}: ${poolEpochs.length} epochs`);
   }
 
-  // 5. Group by epoch timestamp and keep top 30 pools per epoch by votes
+  // 5. Group by epoch timestamp
   const byEpoch = new Map<number, { lp: string; ep: RawEpoch }[]>();
   for (const [lp, epochs] of allEpochs) {
     for (const ep of epochs) {
       getOrSet(byEpoch, Number(ep.ts), () => []).push({ lp, ep });
     }
   }
-  const selectedEntries: { ts: number; lp: string; ep: RawEpoch }[] = [];
-  for (const [ts, bucket] of byEpoch) {
-    bucket.sort((a, b) =>
-      b.ep.votes > a.ep.votes ? 1 : b.ep.votes < a.ep.votes ? -1 : 0
-    );
-    for (const entry of bucket.slice(0, 30)) {
-      selectedEntries.push({ ts, lp: entry.lp, ep: entry.ep });
-    }
-  }
-  console.log(
-    `Selected ${
-      new Set(selectedEntries.map((e) => e.lp)).size
-    } unique pools across ${byEpoch.size} epochs (${
-      selectedEntries.length
-    } records)`
-  );
 
   // 6. Fetch Voted events for the tracked address
   console.log(`Fetching voting history for ${voterAddress}…`);
@@ -500,7 +484,7 @@ async function main() {
         }
       }
     } else {
-      console.log(`  All epochs cached, skipping block scan`);
+      console.log("  All epochs cached, skipping block scan");
     }
 
     const totalVoterVotes = [...voterVotesByEpoch.values()].reduce(
@@ -512,7 +496,28 @@ async function main() {
     );
   }
 
-  // 7. Resolve missing token symbols via Alchemy
+  // 7. Keep top 30 pools per epoch by votes, plus all pools the voter voted for
+  const selectedEntries: { ts: number; lp: string; ep: RawEpoch }[] = [];
+  for (const [ts, bucket] of byEpoch) {
+    bucket.sort((a, b) =>
+      b.ep.votes > a.ep.votes ? 1 : b.ep.votes < a.ep.votes ? -1 : 0
+    );
+    const voterPools = voterVotesByEpoch.get(ts);
+    for (const [i, entry] of bucket.entries()) {
+      if (i < 30 || voterPools?.has(entry.lp)) {
+        selectedEntries.push({ ts, lp: entry.lp, ep: entry.ep });
+      }
+    }
+  }
+  console.log(
+    `Selected ${
+      new Set(selectedEntries.map((e) => e.lp)).size
+    } unique pools across ${byEpoch.size} epochs (${
+      selectedEntries.length
+    } records)`
+  );
+
+  // 8. Resolve missing token symbols via Alchemy
   if (alchemyKey) {
     const missingAddrs = new Set<string>();
     for (const { lp } of selectedEntries) {
@@ -550,7 +555,7 @@ async function main() {
     }
   }
 
-  // 8. Build entry records from selected per-epoch top 30
+  // 9. Build entry records from selected pools (top 30 + voter-voted)
   const entries: {
     record: EpochRecord;
     fees: RawReward;
@@ -607,7 +612,7 @@ async function main() {
     });
   }
 
-  // 9. Fetch token prices and compute USD values
+  // 10. Fetch token prices and compute USD values
   const cachedPrices = loadPricesCsv();
   const cachedPriceCount = [...cachedPrices.values()].reduce(
     (n, m) => n + m.size,
@@ -736,7 +741,7 @@ async function main() {
     console.log("ALCHEMY_API_KEY not set, skipping USD price computation");
   }
 
-  // 10. Compute vote percentages per epoch (using all fetched epoch data)
+  // 11. Compute vote percentages per epoch (using all fetched epoch data)
   const epochTotals = new Map<number, number>();
   for (const [, epochs] of allEpochs) {
     for (const ep of epochs) {
@@ -754,7 +759,7 @@ async function main() {
         : 0;
   }
 
-  // 11. Compute epoch numbers
+  // 12. Compute epoch numbers
   const records = entries.map((e) => e.record);
   const epochTimestamps = [...new Set(records.map((r) => r.epoch_ts))].sort(
     (a, b) => a - b
@@ -766,7 +771,7 @@ async function main() {
     }
   }
 
-  // 12. Classify pool types
+  // 13. Classify pool types
   {
     // Build map of token address -> earliest epoch timestamp
     const tokenFirstEpoch = new Map<string, number>();
@@ -819,7 +824,7 @@ async function main() {
     (a, b) => b.epoch_ts - a.epoch_ts || b.pool_votes - a.pool_votes
   );
 
-  // 13. Write votes.csv
+  // 14. Write votes.csv
   const fields = [
     "epoch_number",
     "epoch_date",

@@ -44,7 +44,7 @@ Reads `votes.csv` and generates `index.html`.
 3. Computes per-pool fee and bribe totals per epoch
 4. Generates CSV data (`fetch`) and an HTML dashboard (`build`)
 
-The top 30 pools per epoch (by vote count) are included.
+The top 30 pools per epoch (by vote count) are included, plus any additional pools the tracked voter voted for.
 
 ## Automation
 
