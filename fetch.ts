@@ -34,6 +34,12 @@ const rewardsSugarAbi = parseAbi([
   "function epochsByAddress(uint256 _limit, uint256 _offset, address _address) view returns ((uint256 ts, address lp, uint256 votes, uint256 emissions, (address token, uint256 amount)[] bribes, (address token, uint256 amount)[] fees)[])",
 ]);
 
+const voterAbi = parseAbi(["function ve() view returns (address)"]);
+
+const veAbi = parseAbi([
+  "function ownerOf(uint256 _tokenId) view returns (address)",
+]);
+
 const votedEvent = parseAbiItem(
   "event Voted(address indexed voter, address indexed pool, uint256 indexed tokenId, uint256 weight, uint256 totalWeight, uint256 timestamp)"
 );
@@ -94,29 +100,50 @@ function getOrSet<K, V>(map: Map<K, V>, key: K, init: () => V): V {
   return v;
 }
 
-/** POST JSON with exponential backoff on 429. Throws on other non-2xx responses. */
-async function postJson(url: string, body: object): Promise<any> {
-  const MAX_RETRIES = 10;
-  const MAX_BACKOFF_S = 64;
+const MAX_RETRIES = 10;
+const MAX_BACKOFF_S = 64;
+
+/** Run an async function with exponential backoff on transient errors (timeouts, rate limits). */
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const isTransient =
+        err?.name === "TimeoutError" ||
+        err?.details?.includes("timed out") ||
+        err?.status === 429 ||
+        err?.code === "ECONNRESET";
+      if (isTransient && attempt < MAX_RETRIES) {
+        const backoff = Math.min(2 ** attempt, MAX_BACKOFF_S);
+        console.warn(
+          `  ${
+            err?.name ?? "Error"
+          } (${label}), retrying in ${backoff}s (attempt ${
+            attempt + 1
+          }/${MAX_RETRIES})`
+        );
+        await new Promise((r) => setTimeout(r, backoff * 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/** POST JSON with retries on 429. Throws on other non-2xx responses. */
+async function postJson(url: string, body: object): Promise<any> {
+  return withRetry(async () => {
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (resp.status === 429 && attempt < MAX_RETRIES) {
-      const backoff = Math.min(2 ** attempt, MAX_BACKOFF_S);
-      console.warn(
-        `  429 from ${url}, retrying in ${backoff}s (attempt ${
-          attempt + 1
-        }/${MAX_RETRIES})`
-      );
-      await new Promise((r) => setTimeout(r, backoff * 1000));
-      continue;
-    }
+    if (resp.status === 429)
+      throw Object.assign(new Error("429"), { status: 429 });
     if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
     return resp.json();
-  }
+  }, url);
 }
 
 /** Paginated readContract fetch. Accumulates all pages into a single array.
@@ -375,6 +402,10 @@ async function main() {
 
   // 6. Fetch Voted events for the tracked address
   console.log(`Fetching voting history for ${voterAddress}…`);
+  const tokenVotesByEpoch = new Map<
+    number,
+    Map<string, { pool: string; weight: number; ts: number }[]>
+  >();
   const voterVotesByEpoch = new Map<number, Map<string, number>>();
   {
     const nowTs = Math.floor(Date.now() / 1000);
@@ -453,29 +484,35 @@ async function main() {
               ? latestBlock
               : from + BLOCK_CHUNK - 1n;
           batch.push(
-            client.getLogs({
-              address: VOTER,
-              event: votedEvent,
-              args: { voter: voterAddress },
-              fromBlock: from,
-              toBlock: to,
-            })
+            withRetry(
+              () =>
+                client.getLogs({
+                  address: VOTER,
+                  event: votedEvent,
+                  args: { voter: voterAddress },
+                  fromBlock: from,
+                  toBlock: to,
+                }),
+              `getLogs ${from}–${to}`
+            )
           );
         }
         const results = await Promise.all(batch);
         for (const logs of results) {
           for (const log of logs) {
             const pool = log.args.pool!.toLowerCase();
+            const tokenId = String(log.args.tokenId!);
             const weight = Number(log.args.weight!) / 1e18;
             const ts = Number(log.args.timestamp!);
             const epochTs = ts - (ts % WEEK);
             if (cachedEpochs.has(epochTs)) continue;
-            const poolVotes = getOrSet(
-              voterVotesByEpoch,
+            const byTokenId = getOrSet(
+              tokenVotesByEpoch,
               epochTs,
               () => new Map()
             );
-            poolVotes.set(pool, (poolVotes.get(pool) ?? 0) + weight);
+            const events = getOrSet(byTokenId, tokenId, () => []);
+            events.push({ pool, weight, ts });
           }
           processed++;
         }
@@ -485,6 +522,47 @@ async function main() {
       }
     } else {
       console.log("  All epochs cached, skipping block scan");
+    }
+
+    // Discard tokenIds not owned by the voter
+    const veAddress = await client.readContract({
+      address: VOTER,
+      abi: voterAbi,
+      functionName: "ve",
+    });
+    const allTokenIds = new Set<string>();
+    for (const byTokenId of tokenVotesByEpoch.values()) {
+      for (const tokenId of byTokenId.keys()) allTokenIds.add(tokenId);
+    }
+    const ownedTokenIds = new Set<string>();
+    for (const tokenId of allTokenIds) {
+      const owner = (
+        await client.readContract({
+          address: veAddress,
+          abi: veAbi,
+          functionName: "ownerOf",
+          args: [BigInt(tokenId)],
+        })
+      ).toLowerCase();
+      if (owner === voterAddress) ownedTokenIds.add(tokenId);
+    }
+    console.log(
+      `  ${ownedTokenIds.size}/${allTokenIds.size} tokenIds owned by voter: ${[
+        ...ownedTokenIds,
+      ].join(", ")}`
+    );
+
+    // Aggregate by (epoch, tokenId), keep only events from the latest timestamp
+    for (const [epochTs, byTokenId] of tokenVotesByEpoch) {
+      const poolTotals = getOrSet(voterVotesByEpoch, epochTs, () => new Map());
+      for (const [tokenId, events] of byTokenId) {
+        if (!ownedTokenIds.has(tokenId)) continue;
+        const maxTs = Math.max(...events.map((e) => e.ts));
+        for (const e of events) {
+          if (e.ts !== maxTs) continue;
+          poolTotals.set(e.pool, (poolTotals.get(e.pool) ?? 0) + e.weight);
+        }
+      }
     }
 
     const totalVoterVotes = [...voterVotesByEpoch.values()].reduce(
