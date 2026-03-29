@@ -25,9 +25,9 @@ type EpochRecord = {
   actual_votes: number;
   actual_vote_pct: number;
   actual_earnings_usd: number;
-  equal_bc5_votes: number;
-  equal_bc5_vote_pct: number;
-  equal_bc5_earnings_usd: number;
+  equal_bc3_votes: number;
+  equal_bc3_vote_pct: number;
+  equal_bc3_earnings_usd: number;
   optimal_bc10_votes: number;
   optimal_bc10_vote_pct: number;
   optimal_bc10_earnings_usd: number;
@@ -94,9 +94,9 @@ for (let i = 1; i < lines.length; i++) {
     actual_votes: p("actual_votes", c),
     actual_vote_pct: p("actual_vote_pct", c),
     actual_earnings_usd: p("actual_earnings_usd", c),
-    equal_bc5_votes: p("equal_bc5_votes", c),
-    equal_bc5_vote_pct: p("equal_bc5_vote_pct", c),
-    equal_bc5_earnings_usd: p("equal_bc5_earnings_usd", c),
+    equal_bc3_votes: p("equal_bc3_votes", c),
+    equal_bc3_vote_pct: p("equal_bc3_vote_pct", c),
+    equal_bc3_earnings_usd: p("equal_bc3_earnings_usd", c),
     optimal_bc10_votes: p("optimal_bc10_votes", c),
     optimal_bc10_vote_pct: p("optimal_bc10_vote_pct", c),
     optimal_bc10_earnings_usd: p("optimal_bc10_earnings_usd", c),
@@ -147,8 +147,8 @@ for (let i = 0; i < sortedEpochs.length; i++) {
     epochRecords.reduce((s, r) => s + fn(r), 0);
 
   const totalActualEarn = sum((r) => r.actual_earnings_usd);
-  const totalEqBc5Votes = sum((r) => r.equal_bc5_votes);
-  const totalEqBc5Earn = sum((r) => r.equal_bc5_earnings_usd);
+  const totalEqBc3Votes = sum((r) => r.equal_bc3_votes);
+  const totalEqBc3Earn = sum((r) => r.equal_bc3_earnings_usd);
   const totalOptBc10Votes = sum((r) => r.optimal_bc10_votes);
   const totalOptBc10Earn = sum((r) => r.optimal_bc10_earnings_usd);
   const totalOpt10Votes = sum((r) => r.optimal10_votes);
@@ -172,7 +172,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
     };
     summaryParts.push(
       `Earnings ${usdFmt(totalActualEarn)}`,
-      `EqBC5 ${relPct(totalEqBc5Earn)}`,
+      `EqBC3 ${relPct(totalEqBc3Earn)}`,
       `OptBC10 ${relPct(totalOptBc10Earn)}`,
       `Opt10 ${relPct(totalOpt10Earn)}`
     );
@@ -191,9 +191,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td class="sep right">${fmt(trueActualVotes)}</td>
             <td></td>
             <td class="right">${usdFmt(totalActualEarn)}</td>
-            <td class="sep right">${fmt(totalEqBc5Votes)}</td>
+            <td class="sep right">${fmt(totalEqBc3Votes)}</td>
             <td></td>
-            <td class="right">${usdFmt(totalEqBc5Earn)}</td>
+            <td class="right">${usdFmt(totalEqBc3Earn)}</td>
             <td class="sep right">${fmt(totalOptBc10Votes)}</td>
             <td></td>
             <td class="right">${usdFmt(totalOptBc10Earn)}</td>
@@ -204,7 +204,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
 
   const rows = epochRecords
     .map((r, j) => {
-      const pt = poolTypeLabel[r.pool_type] ? ` class="${r.pool_type}"` : "";
+      const cls = poolTypeLabel[r.pool_type] ? r.pool_type : "";
+      const pt = cls ? ` class="${cls}"` : "";
+      const ptr = cls ? ` class="${cls} right"` : ` class="right"`;
       const bribeTag =
         r.bribe_tokens.length > 0
           ? `<span>${escapeHtml(r.bribe_tokens[0])}${
@@ -215,18 +217,18 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td${pt}>${j + 1}</td>
             <td${pt}>${escapeHtml(r.pool_name)}</td>
             <td${pt}>${poolTypeLabel[r.pool_type] ?? ""}</td>
-            <td${pt} class="right">${fmt(r.pool_votes)}</td>
-            <td${pt} class="right">${r.pool_vote_pct.toFixed(2)}%</td>
-            <td${pt} class="right">${usdFmt(r.fees_bribes_usd)}</td>
-            <td${pt} class="right">${usdFmt(r.fees_usd)}</td>
-            <td${pt} class="right">${usdFmt(r.bribes_usd)}</td>
+            <td${ptr}>${fmt(r.pool_votes)}</td>
+            <td${ptr}>${r.pool_vote_pct.toFixed(2)}%</td>
+            <td${ptr}>${usdFmt(r.fees_bribes_usd)}</td>
+            <td${ptr}>${usdFmt(r.fees_usd)}</td>
+            <td${ptr}>${usdFmt(r.bribes_usd)}</td>
             <td${pt}><div class="tags">${bribeTag}</div></td>
             <td class="sep right">${fmt(r.actual_votes)}</td>
             <td class="right">${r.actual_vote_pct.toFixed(2)}%</td>
             <td class="right">${usdFmt(r.actual_earnings_usd)}</td>
-            <td class="sep right">${fmt(r.equal_bc5_votes)}</td>
-            <td class="right">${r.equal_bc5_vote_pct.toFixed(2)}%</td>
-            <td class="right">${usdFmt(r.equal_bc5_earnings_usd)}</td>
+            <td class="sep right">${fmt(r.equal_bc3_votes)}</td>
+            <td class="right">${r.equal_bc3_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.equal_bc3_earnings_usd)}</td>
             <td class="sep right">${fmt(r.optimal_bc10_votes)}</td>
             <td class="right">${r.optimal_bc10_vote_pct.toFixed(2)}%</td>
             <td class="right">${usdFmt(r.optimal_bc10_earnings_usd)}</td>
@@ -257,7 +259,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <th class="sep right">Actual Votes</th>
             <th class="right">%</th>
             <th class="right">Earned</th>
-            <th class="sep right">EqBC5 Votes</th>
+            <th class="sep right">EqBC3 Votes</th>
             <th class="right">%</th>
             <th class="right">Earned</th>
             <th class="sep right">OptBC10 Votes</th>

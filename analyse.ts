@@ -173,7 +173,7 @@ for (const r of records) {
   );
 }
 
-// Strategy results per row: [actual, equalBC5, optimalBC10, optimal10]
+// Strategy results per row: [actual, equalBC3, optimalBC10, optimal10]
 const strategies: Strategy[][] = records.map(() => [
   { votes: 0, earnings: 0 },
   { votes: 0, earnings: 0 },
@@ -193,7 +193,7 @@ for (const [epochNum, entries] of byEpoch) {
   const actualVotes = entries.map(({ record: r }) => r.actual_votes);
   const actualEarnings = computeEarnings(pools, actualVotes);
 
-  // 2. Equal split among top 5 bluechip pools (by fees+bribes)
+  // 2. Equal split among top 3 bluechip pools (by fees+bribes)
   const bluechipIndices = entries
     .map(({ record: r }, j) => ({
       j,
@@ -202,7 +202,7 @@ for (const [epochNum, entries] of byEpoch) {
     }))
     .filter((x) => x.type === "bluechip")
     .sort((a, b) => b.reward - a.reward)
-    .slice(0, 5)
+    .slice(0, 3)
     .map((x) => x.j);
 
   const equalBcVotes = pools.map(() => 0);
@@ -247,9 +247,9 @@ const analysisFields = [
   "actual_votes",
   "actual_vote_pct",
   "actual_earnings_usd",
-  "equal_bc5_votes",
-  "equal_bc5_vote_pct",
-  "equal_bc5_earnings_usd",
+  "equal_bc3_votes",
+  "equal_bc3_vote_pct",
+  "equal_bc3_earnings_usd",
   "optimal_bc10_votes",
   "optimal_bc10_vote_pct",
   "optimal_bc10_earnings_usd",
@@ -284,14 +284,14 @@ for (let i = 0; i < rows.length; i++) {
 
   const r = records[i];
   const voterTotal = voterTotalByEpoch.get(r.epoch_number) ?? 0;
-  const [actual, equalBc5, optBc10, optimal10] = strategies[i];
+  const [actual, equalBc3, optBc10, optimal10] = strategies[i];
   const analysisValues = [
     round(actual.votes),
     round(votePct(actual.votes, voterTotal), 4),
     round(actual.earnings),
-    round(equalBc5.votes),
-    round(votePct(equalBc5.votes, voterTotal), 4),
-    round(equalBc5.earnings),
+    round(equalBc3.votes),
+    round(votePct(equalBc3.votes, voterTotal), 4),
+    round(equalBc3.earnings),
     round(optBc10.votes),
     round(votePct(optBc10.votes, voterTotal), 4),
     round(optBc10.earnings),
@@ -308,18 +308,18 @@ writeFileSync("votes.csv", outLines.join("\n") + "\n");
 // -- Summary --
 
 let totalActual = 0;
-let totalEqualBc5 = 0;
+let totalEqualBc3 = 0;
 let totalOptBc10 = 0;
 let totalOpt10 = 0;
 for (const [actual, ebc5, obc10, o10] of strategies) {
   totalActual += actual.earnings;
-  totalEqualBc5 += ebc5.earnings;
+  totalEqualBc3 += ebc5.earnings;
   totalOptBc10 += obc10.earnings;
   totalOpt10 += o10.earnings;
 }
 
 console.log("Voting analysis complete:");
 console.log(`  Actual earnings:       $${round(totalActual)}`);
-console.log(`  Equal BC top-5:        $${round(totalEqualBc5)}`);
+console.log(`  Equal BC top-3:        $${round(totalEqualBc3)}`);
 console.log(`  Optimal BC (10 pools): $${round(totalOptBc10)}`);
 console.log(`  Optimal (10 pools):    $${round(totalOpt10)}`);
