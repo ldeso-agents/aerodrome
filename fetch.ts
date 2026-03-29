@@ -73,8 +73,6 @@ type EpochRecord = {
   total_votes: number;
   pool_votes: number;
   pool_vote_pct: number;
-  voter_votes: number;
-  voter_vote_pct: number;
   fees_bribes_usd: number;
   fees_usd: number;
   bribes_usd: number;
@@ -86,6 +84,8 @@ type EpochRecord = {
   aero_usd: number;
   pool_address: string;
   voter_address: string;
+  actual_votes: number;
+  actual_vote_pct: number;
 };
 type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd)
 
@@ -422,7 +422,7 @@ async function main() {
           .map((v) => v.replace(/^"(.*)"$/, "$1"));
         const epochDate = cols[idx("epoch_date")];
         const pool = cols[idx("pool_address")]?.toLowerCase();
-        const voterVotes = parseFloat(cols[idx("voter_votes")]);
+        const voterVotes = parseFloat(cols[idx("actual_votes")]);
         const voterAddr = cols[idx("voter_address")];
         if (voterAddr !== voterAddress) continue;
         if (!epochDate || !pool || isNaN(voterVotes)) continue;
@@ -664,8 +664,8 @@ async function main() {
         total_votes: 0,
         pool_votes: Number(ep.votes) / 1e18,
         pool_vote_pct: 0,
-        voter_votes: voterVotesForPool,
-        voter_vote_pct:
+        actual_votes: voterVotesForPool,
+        actual_vote_pct:
           voterTotalForEpoch > 0
             ? Math.round(
                 (voterVotesForPool / voterTotalForEpoch) * 100 * 10000
@@ -911,8 +911,6 @@ async function main() {
     "total_votes",
     "pool_votes",
     "pool_vote_pct",
-    "voter_votes",
-    "voter_vote_pct",
     "fees_bribes_usd",
     "fees_usd",
     "bribes_usd",
@@ -924,6 +922,8 @@ async function main() {
     "aero_usd",
     "pool_address",
     "voter_address",
+    "actual_votes",
+    "actual_vote_pct",
   ] as const;
 
   const csvLines = [fields.join(",")];

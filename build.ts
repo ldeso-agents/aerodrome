@@ -11,8 +11,6 @@ type EpochRecord = {
   total_votes: number;
   pool_votes: number;
   pool_vote_pct: number;
-  voter_votes: number;
-  voter_vote_pct: number;
   fees_bribes_usd: number;
   fees_usd: number;
   bribes_usd: number;
@@ -24,6 +22,18 @@ type EpochRecord = {
   aero_usd: number;
   pool_address: string;
   voter_address: string;
+  actual_votes: number;
+  actual_vote_pct: number;
+  actual_earnings_usd: number;
+  equal_bc5_votes: number;
+  equal_bc5_vote_pct: number;
+  equal_bc5_earnings_usd: number;
+  optimal_bc10_votes: number;
+  optimal_bc10_vote_pct: number;
+  optimal_bc10_earnings_usd: number;
+  optimal10_votes: number;
+  optimal10_vote_pct: number;
+  optimal10_earnings_usd: number;
 };
 
 // -- Helpers --
@@ -40,20 +50,12 @@ const fmt = (n: number, digits: number = 0) =>
     maximumFractionDigits: digits,
   });
 const usdFmt = (n: number, digits: number = 0) => "$" + fmt(n, digits);
-const tagSpans = (arr: string[]) =>
-  arr.map((s) => `<span>${escapeHtml(s)}</span>`).join("");
 
 const poolTypeLabel: Record<string, string> = {
   bluechip: "blue chip",
   stablecoin: "stable",
   aero: "aero",
   new: "new",
-};
-const poolTypeBg: Record<string, string> = {
-  bluechip: "#eef4ff",
-  stablecoin: "#efefef",
-  aero: "#ffedeb",
-  new: "#e6f4ea",
 };
 
 // -- Main --
@@ -63,6 +65,7 @@ const text = readFileSync("votes.csv", "utf-8").trimEnd();
 const lines = text.split("\n");
 const header = lines[0].split(",");
 const idx = (name: string) => header.indexOf(name);
+const p = (col: string, c: string[]) => parseFloat(c[idx(col)] ?? "0");
 
 const records: EpochRecord[] = [];
 for (let i = 1; i < lines.length; i++) {
@@ -74,22 +77,32 @@ for (let i = 1; i < lines.length; i++) {
     epoch_date: epochDate,
     pool_name: c[idx("pool_name")],
     pool_type: c[idx("pool_type")],
-    total_votes: parseFloat(c[idx("total_votes")]),
-    pool_votes: parseFloat(c[idx("pool_votes")]),
-    pool_vote_pct: parseFloat(c[idx("pool_vote_pct")]),
-    voter_votes: parseFloat(c[idx("voter_votes")]),
-    voter_vote_pct: parseFloat(c[idx("voter_vote_pct")]),
-    fees_bribes_usd: parseFloat(c[idx("fees_bribes_usd")]),
-    fees_usd: parseFloat(c[idx("fees_usd")]),
-    bribes_usd: parseFloat(c[idx("bribes_usd")]),
+    total_votes: p("total_votes", c),
+    pool_votes: p("pool_votes", c),
+    pool_vote_pct: p("pool_vote_pct", c),
+    fees_bribes_usd: p("fees_bribes_usd", c),
+    fees_usd: p("fees_usd", c),
+    bribes_usd: p("bribes_usd", c),
     bribe_tokens: (c[idx("bribe_tokens")] ?? "").split(";").filter(Boolean),
-    fees_token0_usd: parseFloat(c[idx("fees_token0_usd")]),
+    fees_token0_usd: p("fees_token0_usd", c),
     token0: c[idx("token0")],
-    fees_token1_usd: parseFloat(c[idx("fees_token1_usd")]),
+    fees_token1_usd: p("fees_token1_usd", c),
     token1: c[idx("token1")],
-    aero_usd: parseFloat(c[idx("aero_usd")]),
+    aero_usd: p("aero_usd", c),
     pool_address: c[idx("pool_address")],
     voter_address: c[idx("voter_address")],
+    actual_votes: p("actual_votes", c),
+    actual_vote_pct: p("actual_vote_pct", c),
+    actual_earnings_usd: p("actual_earnings_usd", c),
+    equal_bc5_votes: p("equal_bc5_votes", c),
+    equal_bc5_vote_pct: p("equal_bc5_vote_pct", c),
+    equal_bc5_earnings_usd: p("equal_bc5_earnings_usd", c),
+    optimal_bc10_votes: p("optimal_bc10_votes", c),
+    optimal_bc10_vote_pct: p("optimal_bc10_vote_pct", c),
+    optimal_bc10_earnings_usd: p("optimal_bc10_earnings_usd", c),
+    optimal10_votes: p("optimal10_votes", c),
+    optimal10_vote_pct: p("optimal10_vote_pct", c),
+    optimal10_earnings_usd: p("optimal10_earnings_usd", c),
   });
 }
 
@@ -97,14 +110,14 @@ records.sort((a, b) => b.epoch_ts - a.epoch_ts || b.pool_votes - a.pool_votes);
 
 const voterAddress = records[0]?.voter_address ?? "unknown";
 
-// 2. Compute epoch totals and voter totals
+// 2. Compute epoch totals
 const epochTotals = new Map<number, number>();
-const voterVotesByEpoch = new Map<number, number>();
+const actualVotesByEpoch = new Map<number, number>();
 for (const r of records) {
   epochTotals.set(r.epoch_ts, r.total_votes);
-  voterVotesByEpoch.set(
+  actualVotesByEpoch.set(
     r.epoch_ts,
-    (voterVotesByEpoch.get(r.epoch_ts) ?? 0) + r.voter_votes
+    (actualVotesByEpoch.get(r.epoch_ts) ?? 0) + r.actual_votes
   );
 }
 
@@ -128,65 +141,107 @@ for (let i = 0; i < sortedEpochs.length; i++) {
   const first = epochRecords[0];
 
   const trueVotes = epochTotals.get(first.epoch_ts) ?? 0;
-  const trueVoterVotes = voterVotesByEpoch.get(first.epoch_ts) ?? 0;
+  const trueActualVotes = actualVotesByEpoch.get(first.epoch_ts) ?? 0;
 
-  const totalRow = `          <tr style="font-weight:600;background:#f0f0f0">
-            <td></td>
-            <td>TOTAL</td>
-            <td></td>
-            <td class="right">${fmt(trueVotes)}</td>
-            <td></td>
-            <td class="right">${fmt(trueVoterVotes)}</td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-          </tr>`;
+  const sum = (fn: (r: EpochRecord) => number) =>
+    epochRecords.reduce((s, r) => s + fn(r), 0);
 
-  const rows = epochRecords
-    .map((r, j) => {
-      const background = poolTypeBg[r.pool_type]
-        ? ` style="background:${poolTypeBg[r.pool_type]}"`
-        : "";
-      return `        <tr>
-            <td>${j + 1}</td>
-            <td${background}>${escapeHtml(r.pool_name)}</td>
-            <td${background}>${
-        poolTypeLabel[r.pool_type] ? poolTypeLabel[r.pool_type] : ""
-      }</td>
-            <td${background} class="right">${fmt(r.pool_votes)}</td>
-            <td${background} class="right">${r.pool_vote_pct.toFixed(2)}%</td>
-            <td${background} class="right">${fmt(r.voter_votes)}</td>
-            <td${background} class="right">${r.voter_vote_pct.toFixed(2)}%</td>
-            <td${background} class="right">${usdFmt(r.fees_bribes_usd)}</td>
-            <td${background} class="right">${usdFmt(r.fees_usd)}</td>
-            <td${background} class="right">${usdFmt(r.bribes_usd)}</td>
-            <td><div class="tags">${tagSpans(r.bribe_tokens)}</div></td>
-            <td class="right">${usdFmt(r.fees_token0_usd)}</td>
-            <td>${escapeHtml(r.token0)}</td>
-            <td class="right">${usdFmt(r.fees_token1_usd)}</td>
-            <td>${escapeHtml(r.token1)}</td>
-            <td class="right">${usdFmt(r.aero_usd, 4)}</td>
-          </tr>`;
-    })
-    .join("\n");
+  const totalActualEarn = sum((r) => r.actual_earnings_usd);
+  const totalEqBc5Votes = sum((r) => r.equal_bc5_votes);
+  const totalEqBc5Earn = sum((r) => r.equal_bc5_earnings_usd);
+  const totalOptBc10Votes = sum((r) => r.optimal_bc10_votes);
+  const totalOptBc10Earn = sum((r) => r.optimal_bc10_earnings_usd);
+  const totalOpt10Votes = sum((r) => r.optimal10_votes);
+  const totalOpt10Earn = sum((r) => r.optimal10_earnings_usd);
 
-  sections.push(`  <details${i < 2 ? " open" : ""}>
-    <summary>Epoch ${first.epoch_number} \u2013 ${first.epoch_date}${
+  const currentNote =
     i === 0
       ? ` (current epoch as of ${new Date()
           .toISOString()
           .replace("T", " ")
           .replace(/:\d{2}\.\d+Z$/, " UTC")})`
-      : ""
-  }</summary>
-    <div style="overflow-x:auto">
+      : "";
+
+  const summaryParts = [`AERO ${usdFmt(first.aero_usd, 4)}`];
+  if (trueActualVotes > 0) {
+    const relPct = (v: number) => {
+      if (totalActualEarn === 0) return "+0%";
+      const pct = ((v - totalActualEarn) / totalActualEarn) * 100;
+      const sign = pct >= 0 ? "+" : "\u2212";
+      return `${sign}${Math.abs(pct).toFixed(0)}%`;
+    };
+    summaryParts.push(
+      `Earnings ${usdFmt(totalActualEarn)}`,
+      `EqBC5 ${relPct(totalEqBc5Earn)}`,
+      `OptBC10 ${relPct(totalOptBc10Earn)}`,
+      `Opt10 ${relPct(totalOpt10Earn)}`
+    );
+  }
+
+  const totalRow = `          <tr class="total">
+            <td></td>
+            <td>TOTAL</td>
+            <td></td>
+            <td class="right">${fmt(trueVotes)}</td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td class="sep right">${fmt(trueActualVotes)}</td>
+            <td></td>
+            <td class="right">${usdFmt(totalActualEarn)}</td>
+            <td class="sep right">${fmt(totalEqBc5Votes)}</td>
+            <td></td>
+            <td class="right">${usdFmt(totalEqBc5Earn)}</td>
+            <td class="sep right">${fmt(totalOptBc10Votes)}</td>
+            <td></td>
+            <td class="right">${usdFmt(totalOptBc10Earn)}</td>
+            <td class="sep right">${fmt(totalOpt10Votes)}</td>
+            <td></td>
+            <td class="right">${usdFmt(totalOpt10Earn)}</td>
+          </tr>`;
+
+  const rows = epochRecords
+    .map((r, j) => {
+      const pt = poolTypeLabel[r.pool_type] ? ` class="${r.pool_type}"` : "";
+      const bribeTag =
+        r.bribe_tokens.length > 0
+          ? `<span>${escapeHtml(r.bribe_tokens[0])}${
+              r.bribe_tokens.length > 1 ? "\u2026" : ""
+            }</span>`
+          : "";
+      return `        <tr>
+            <td${pt}>${j + 1}</td>
+            <td${pt}>${escapeHtml(r.pool_name)}</td>
+            <td${pt}>${poolTypeLabel[r.pool_type] ?? ""}</td>
+            <td${pt} class="right">${fmt(r.pool_votes)}</td>
+            <td${pt} class="right">${r.pool_vote_pct.toFixed(2)}%</td>
+            <td${pt} class="right">${usdFmt(r.fees_bribes_usd)}</td>
+            <td${pt} class="right">${usdFmt(r.fees_usd)}</td>
+            <td${pt} class="right">${usdFmt(r.bribes_usd)}</td>
+            <td${pt}><div class="tags">${bribeTag}</div></td>
+            <td class="sep right">${fmt(r.actual_votes)}</td>
+            <td class="right">${r.actual_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.actual_earnings_usd)}</td>
+            <td class="sep right">${fmt(r.equal_bc5_votes)}</td>
+            <td class="right">${r.equal_bc5_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.equal_bc5_earnings_usd)}</td>
+            <td class="sep right">${fmt(r.optimal_bc10_votes)}</td>
+            <td class="right">${r.optimal_bc10_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.optimal_bc10_earnings_usd)}</td>
+            <td class="sep right">${fmt(r.optimal10_votes)}</td>
+            <td class="right">${r.optimal10_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.optimal10_earnings_usd)}</td>
+          </tr>`;
+    })
+    .join("\n");
+
+  sections.push(`  <details${i < 2 ? " open" : ""}>
+    <summary>Epoch ${first.epoch_number} \u2013 ${
+    first.epoch_date
+  } \u2014 ${summaryParts.join(" \u00b7 ")}${currentNote}</summary>
+    <div class="scroll">
       <table>
         <thead>
           <tr>
@@ -195,17 +250,22 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <th>Type</th>
             <th class="right">Pool Votes</th>
             <th class="right">Pool Vote %</th>
-            <th class="right">Voter Votes</th>
-            <th class="right">Voter Vote %</th>
-            <th class="right">Fees + Bribes (USD)</th>
-            <th class="right">Fees (USD)</th>
-            <th class="right">Bribes (USD)</th>
+            <th class="right">Fees + Bribes</th>
+            <th class="right">Fees</th>
+            <th class="right">Bribes</th>
             <th>Bribe Tokens</th>
-            <th class="right">Fees Token0 (USD)</th>
-            <th>Token0</th>
-            <th class="right">Fees Token1 (USD)</th>
-            <th>Token1</th>
-            <th class="right">AERO (USD)</th>
+            <th class="sep right">Actual Votes</th>
+            <th class="right">%</th>
+            <th class="right">Earned</th>
+            <th class="sep right">EqBC5 Votes</th>
+            <th class="right">%</th>
+            <th class="right">Earned</th>
+            <th class="sep right">OptBC10 Votes</th>
+            <th class="right">%</th>
+            <th class="right">Earned</th>
+            <th class="sep right">Opt10 Votes</th>
+            <th class="right">%</th>
+            <th class="right">Earned</th>
           </tr>
         </thead>
         <tbody>
@@ -229,21 +289,27 @@ const html = `<!DOCTYPE html>
     body { font-family: system-ui, sans-serif; padding: 1rem; color: #1a1a1a; background: #fafafa; }
     h1 { font-size: 1.4rem; margin-bottom: 1rem; }
     details { margin-bottom: .5rem; }
-    summary { cursor: pointer; font-weight: 600; font-size: .95rem; padding: .5rem; background: #f0f0f0; border-radius: 4px; }
+    summary { cursor: pointer; font-weight: 600; font-size: .95rem; padding: .5rem; background: #f0f0f0; border-radius: 4px; font-variant-numeric: tabular-nums; }
     summary:hover { background: #e8e8e8; }
-    table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .5rem; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .5rem; font-variant-numeric: tabular-nums; }
     th, td { padding: .4rem .6rem; text-align: left; border-bottom: 1px solid #e0e0e0; white-space: nowrap; }
     th { background: #f0f0f0; font-weight: 600; position: sticky; top: 0; }
+    .voter { font-size: .85rem; margin-bottom: 1rem; color: #555; }
+    .scroll { overflow-x: auto; }
     .right { text-align: right; }
+    .sep { border-left: 2px solid #bbb; }
+    .total { font-weight: 600; background: #f0f0f0; }
+    .bluechip { background: #eef4ff; }
+    .stablecoin { background: #efefef; }
+    .aero { background: #ffedeb; }
+    .new { background: #e6f4ea; }
     .tags { display: flex; gap: .2rem; flex-wrap: wrap; }
     .tags span { background: #e8e8e8; padding: .1rem .3rem; border-radius: 3px; font-size: .75rem; }
   </style>
 </head>
 <body>
   <h1>Aerodrome Votes \u2192 <a href="votes.csv">votes.csv</a></h1>
-  <p style="font-size:.85rem;margin-bottom:1rem;color:#555">Voter: <code>${escapeHtml(
-    voterAddress
-  )}</code></p>
+  <p class="voter">Voter: <code>${escapeHtml(voterAddress)}</code></p>
 ${sections.join("\n")}
 </body>
 </html>`;

@@ -2,6 +2,7 @@
   "type": "module",
   "scripts": {
     "fetch": "node --env-file-if-exists=.env fetch.ts",
+    "analyse": "node analyse.ts",
     "build": "node build.ts"
   },
   "dependencies": {
