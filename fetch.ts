@@ -175,7 +175,7 @@ async function fetchAllPages<T>(
 }
 
 const isStablecoin = (symbol: string) => /USD|EUR/i.test(symbol);
-const isBluechip = (symbol: string) => /ETH|BTC/i.test(symbol);
+const isBluechip = (symbol: string) => /BTC|ETH|SOL/i.test(symbol);
 const isAero = (symbol: string) => symbol === "AERO";
 
 /** Build a human-readable pool name. CL pools have empty symbol in Sugar. */
