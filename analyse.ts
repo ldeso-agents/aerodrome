@@ -7,8 +7,8 @@ type PoolRecord = {
   epoch_date: string;
   pool_name: string;
   pool_type: string;
-  total_votes: number;
   pool_votes: number;
+  pool_votes_total: number;
   pool_vote_pct: number;
   fees_bribes_usd: number;
   fees_usd: number;
@@ -22,6 +22,7 @@ type PoolRecord = {
   pool_address: string;
   voter_address: string;
   actual_votes: number;
+  actual_votes_total: number;
   actual_vote_pct: number;
 };
 
@@ -49,8 +50,8 @@ function parseRecords(header: string[], rows: string[][]): PoolRecord[] {
     epoch_date: c[idx("epoch_date")],
     pool_name: c[idx("pool_name")],
     pool_type: c[idx("pool_type")],
-    total_votes: parseFloat(c[idx("total_votes")]),
     pool_votes: parseFloat(c[idx("pool_votes")]),
+    pool_votes_total: parseFloat(c[idx("pool_votes_total")]),
     pool_vote_pct: parseFloat(c[idx("pool_vote_pct")]),
     fees_bribes_usd: parseFloat(c[idx("fees_bribes_usd")]),
     fees_usd: parseFloat(c[idx("fees_usd")]),
@@ -64,6 +65,7 @@ function parseRecords(header: string[], rows: string[][]): PoolRecord[] {
     pool_address: c[idx("pool_address")],
     voter_address: c[idx("voter_address")],
     actual_votes: parseFloat(c[idx("actual_votes")]),
+    actual_votes_total: parseFloat(c[idx("actual_votes_total")]),
     actual_vote_pct: parseFloat(c[idx("actual_vote_pct")]),
   }));
 }
@@ -167,10 +169,9 @@ for (let i = 0; i < records.length; i++) {
 // Compute voter's total votes per epoch
 const voterTotalByEpoch = new Map<number, number>();
 for (const r of records) {
-  voterTotalByEpoch.set(
-    r.epoch_number,
-    (voterTotalByEpoch.get(r.epoch_number) ?? 0) + r.actual_votes
-  );
+  if (!voterTotalByEpoch.has(r.epoch_number)) {
+    voterTotalByEpoch.set(r.epoch_number, r.actual_votes_total);
+  }
 }
 
 // Strategy results per row: [actual, equalBC3, optimalBC10, optimal10]
@@ -244,7 +245,6 @@ for (const [epochNum, entries] of byEpoch) {
 // -- Write updated votes.csv --
 
 const analysisFields = [
-  "actual_votes",
   "actual_vote_pct",
   "actual_earnings_usd",
   "equal_bc3_votes",
@@ -286,7 +286,6 @@ for (let i = 0; i < rows.length; i++) {
   const voterTotal = voterTotalByEpoch.get(r.epoch_number) ?? 0;
   const [actual, equalBc3, optBc10, optimal10] = strategies[i];
   const analysisValues = [
-    round(actual.votes),
     round(votePct(actual.votes, voterTotal), 4),
     round(actual.earnings),
     round(equalBc3.votes),

@@ -70,7 +70,7 @@ type EpochRecord = {
   price_date: string;
   pool_name: string;
   pool_type: PoolType;
-  total_votes: number;
+  pool_votes_total: number;
   pool_votes: number;
   pool_vote_pct: number;
   fees_bribes_usd: number;
@@ -85,6 +85,7 @@ type EpochRecord = {
   pool_address: string;
   voter_address: string;
   actual_votes: number;
+  actual_votes_total: number;
   actual_vote_pct: number;
 };
 type PriceMap = Map<string, Map<string, number>>; // token -> (YYYY-MM-DD -> usd)
@@ -585,7 +586,7 @@ async function main() {
       const lastVote = votedEpochs[votedEpochs.length - 1];
       let lastPoolWeights: Map<string, number> | undefined;
       for (const ts of allEpochTimestamps) {
-        if (ts < firstVote || ts > lastVote) continue;
+        if (ts < firstVote) continue;
         const existing = epochMap.get(ts);
         if (existing) {
           lastPoolWeights = existing;
@@ -606,6 +607,20 @@ async function main() {
         for (const [pool, weight] of poolWeights) {
           poolTotals.set(pool, (poolTotals.get(pool) ?? 0) + weight);
         }
+      }
+    }
+  }
+
+  // Propagate last known voter votes to subsequent epochs
+  {
+    const sortedEpochTs = [...byEpoch.keys()].sort((a, b) => a - b);
+    let lastVoterPools: Map<string, number> | undefined;
+    for (const ts of sortedEpochTs) {
+      const existing = voterVotesByEpoch.get(ts);
+      if (existing && existing.size > 0) {
+        lastVoterPools = existing;
+      } else if (lastVoterPools && !existing) {
+        voterVotesByEpoch.set(ts, new Map(lastVoterPools));
       }
     }
   }
@@ -725,10 +740,11 @@ async function main() {
             : new Date((epochStartTs + WEEK) * 1000).toISOString().slice(0, 10),
         pool_name: poolName(pool, tokens),
         pool_type: "other",
-        total_votes: 0,
+        pool_votes_total: 0,
         pool_votes: Number(ep.votes) / 1e18,
         pool_vote_pct: 0,
         actual_votes: voterVotesForPool,
+        actual_votes_total: voterTotalForEpoch,
         actual_vote_pct:
           voterTotalForEpoch > 0
             ? Math.round(
@@ -892,7 +908,7 @@ async function main() {
   console.log(`Computing vote percentages for ${epochTotals.size} epochs…`);
   for (const { record } of entries) {
     const total = epochTotals.get(record.epoch_ts) ?? 0;
-    record.total_votes = total;
+    record.pool_votes_total = total;
     record.pool_vote_pct =
       total > 0
         ? Math.round((record.pool_votes / total) * 100 * 10000) / 10000
@@ -970,8 +986,8 @@ async function main() {
     "epoch_date",
     "pool_name",
     "pool_type",
-    "total_votes",
     "pool_votes",
+    "pool_votes_total",
     "pool_vote_pct",
     "fees_bribes_usd",
     "fees_usd",
@@ -985,6 +1001,7 @@ async function main() {
     "pool_address",
     "voter_address",
     "actual_votes",
+    "actual_votes_total",
     "actual_vote_pct",
   ] as const;
 

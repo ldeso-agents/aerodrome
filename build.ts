@@ -8,8 +8,8 @@ type EpochRecord = {
   epoch_date: string;
   pool_name: string;
   pool_type: string;
-  total_votes: number;
   pool_votes: number;
+  pool_votes_total: number;
   pool_vote_pct: number;
   fees_bribes_usd: number;
   fees_usd: number;
@@ -23,6 +23,7 @@ type EpochRecord = {
   pool_address: string;
   voter_address: string;
   actual_votes: number;
+  actual_votes_total: number;
   actual_vote_pct: number;
   actual_earnings_usd: number;
   equal_bc3_votes: number;
@@ -77,8 +78,8 @@ for (let i = 1; i < lines.length; i++) {
     epoch_date: epochDate,
     pool_name: c[idx("pool_name")],
     pool_type: c[idx("pool_type")],
-    total_votes: p("total_votes", c),
     pool_votes: p("pool_votes", c),
+    pool_votes_total: p("pool_votes_total", c),
     pool_vote_pct: p("pool_vote_pct", c),
     fees_bribes_usd: p("fees_bribes_usd", c),
     fees_usd: p("fees_usd", c),
@@ -92,6 +93,7 @@ for (let i = 1; i < lines.length; i++) {
     pool_address: c[idx("pool_address")],
     voter_address: c[idx("voter_address")],
     actual_votes: p("actual_votes", c),
+    actual_votes_total: p("actual_votes_total", c),
     actual_vote_pct: p("actual_vote_pct", c),
     actual_earnings_usd: p("actual_earnings_usd", c),
     equal_bc3_votes: p("equal_bc3_votes", c),
@@ -114,11 +116,10 @@ const voterAddress = records[0]?.voter_address ?? "unknown";
 const epochTotals = new Map<number, number>();
 const actualVotesByEpoch = new Map<number, number>();
 for (const r of records) {
-  epochTotals.set(r.epoch_ts, r.total_votes);
-  actualVotesByEpoch.set(
-    r.epoch_ts,
-    (actualVotesByEpoch.get(r.epoch_ts) ?? 0) + r.actual_votes
-  );
+  epochTotals.set(r.epoch_ts, r.pool_votes_total);
+  if (!actualVotesByEpoch.has(r.epoch_ts)) {
+    actualVotesByEpoch.set(r.epoch_ts, r.actual_votes_total);
+  }
 }
 
 // 3. Group records by epoch
