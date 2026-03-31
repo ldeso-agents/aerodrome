@@ -524,7 +524,7 @@ async function main() {
       console.log("  All epochs cached, skipping block scan");
     }
 
-    // Discard tokenIds not owned by the voter
+    // Discard tokenIds not owned by the voter or by the zero address
     const veAddress = await client.readContract({
       address: VOTER,
       abi: voterAbi,
@@ -544,7 +544,7 @@ async function main() {
           args: [BigInt(tokenId)],
         })
       ).toLowerCase();
-      if (owner === voterAddress) ownedTokenIds.add(tokenId);
+      if (owner === voterAddress || owner === ZERO) ownedTokenIds.add(tokenId);
     }
     console.log(
       `  ${ownedTokenIds.size}/${allTokenIds.size} tokenIds owned by voter: ${[
@@ -553,14 +553,59 @@ async function main() {
     );
 
     // Aggregate by (epoch, tokenId), keep only events from the latest timestamp
-    for (const [epochTs, byTokenId] of tokenVotesByEpoch) {
-      const poolTotals = getOrSet(voterVotesByEpoch, epochTs, () => new Map());
-      for (const [tokenId, events] of byTokenId) {
-        if (!ownedTokenIds.has(tokenId)) continue;
-        const maxTs = Math.max(...events.map((e) => e.ts));
-        for (const e of events) {
-          if (e.ts !== maxTs) continue;
-          poolTotals.set(e.pool, (poolTotals.get(e.pool) ?? 0) + e.weight);
+    // then carry forward per-tokenId
+    {
+      // Step 1: Build per-tokenId, per-epoch pool→weight maps from events
+      const tokenVotes = new Map<string, Map<number, Map<string, number>>>(); // tokenId -> (epochTs -> (pool -> weight))
+      for (const [epochTs, byTokenId] of tokenVotesByEpoch) {
+        for (const [tokenId, events] of byTokenId) {
+          if (!ownedTokenIds.has(tokenId)) continue;
+          const maxTs = Math.max(...events.map((e) => e.ts));
+          const poolWeights = new Map<string, number>();
+          for (const e of events) {
+            if (e.ts !== maxTs) continue;
+            poolWeights.set(e.pool, (poolWeights.get(e.pool) ?? 0) + e.weight);
+          }
+          getOrSet(tokenVotes, tokenId, () => new Map()).set(
+            epochTs,
+            poolWeights
+          );
+        }
+      }
+      console.log(`  ${tokenVotes.size} tokenIds with vote data`);
+
+      // Step 2: Per-tokenId carry-forward across gap epochs
+      const allEpochTimestamps = [...byEpoch.keys()].sort((a, b) => a - b);
+      let totalCarried = 0;
+      for (const [, epochMap] of tokenVotes) {
+        const votedEpochs = [...epochMap.keys()].sort((a, b) => a - b);
+        if (votedEpochs.length === 0) continue;
+        const firstVote = votedEpochs[0];
+        const lastVote = votedEpochs[votedEpochs.length - 1];
+        let lastPoolWeights: Map<string, number> | undefined;
+        for (const ts of allEpochTimestamps) {
+          if (ts < firstVote || ts > lastVote) continue;
+          const existing = epochMap.get(ts);
+          if (existing) {
+            lastPoolWeights = existing;
+          } else if (lastPoolWeights) {
+            epochMap.set(ts, new Map(lastPoolWeights));
+            totalCarried++;
+          }
+        }
+      }
+
+      // Step 3: Aggregate across all tokenIds into voterVotesByEpoch
+      for (const [, epochMap] of tokenVotes) {
+        for (const [epochTs, poolWeights] of epochMap) {
+          const poolTotals = getOrSet(
+            voterVotesByEpoch,
+            epochTs,
+            () => new Map()
+          );
+          for (const [pool, weight] of poolWeights) {
+            poolTotals.set(pool, (poolTotals.get(pool) ?? 0) + weight);
+          }
         }
       }
     }
@@ -581,9 +626,29 @@ async function main() {
       b.ep.votes > a.ep.votes ? 1 : b.ep.votes < a.ep.votes ? -1 : 0
     );
     const voterPools = voterVotesByEpoch.get(ts);
+    const bucketLps = new Set(bucket.map((e) => e.lp));
     for (const [i, entry] of bucket.entries()) {
       if (i < 30 || voterPools?.has(entry.lp)) {
         selectedEntries.push({ ts, lp: entry.lp, ep: entry.ep });
+      }
+    }
+    // Add voter-voted pools that aren't in this epoch's Sugar data
+    if (voterPools) {
+      for (const poolAddr of voterPools.keys()) {
+        if (!bucketLps.has(poolAddr)) {
+          selectedEntries.push({
+            ts,
+            lp: poolAddr,
+            ep: {
+              ts: BigInt(ts),
+              lp: poolAddr as Address,
+              votes: 0n,
+              emissions: 0n,
+              bribes: [],
+              fees: [],
+            },
+          });
+        }
       }
     }
   }
