@@ -624,8 +624,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
 
 // 5b. Build strategy votes for latest epoch
 const latestRecords = sortedEpochs[0]?.[1] ?? [];
-const latestFirst = latestRecords[0];
-const latestEpochHeading = `Epoch ${latestFirst.epoch_number} as of ${new Date()
+const latestEpochHeading = `Current strategy votes as of ${new Date()
   .toISOString()
   .replace("T", " ")
   .replace(/:\d{2}\.\d+Z$/, " UTC")}`;
@@ -641,8 +640,8 @@ const buildVoteList = (
     .sort((a, b) => pctFn(b) - pctFn(a))
     .map(
       (r) =>
-        `        <li>${escapeHtml(r.pool_name)} \u2013 ${Math.round(
-          pctFn(r)
+        `        <li>${escapeHtml(r.pool_name)} \u2013 ${pctFn(r).toFixed(
+          2
         )}%</li>`
     )
     .join("\n");
