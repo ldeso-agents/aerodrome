@@ -235,7 +235,9 @@ function buildSvg(data: EpochSummary[], id: string): string {
     data.map((d, i) => `${x(i).toFixed(1)},${yE(fn(d)).toFixed(1)}`).join(" ");
   const polyA = (fn: (d: EpochSummary) => number) =>
     data.map((d, i) => `${x(i).toFixed(1)},${yA(fn(d)).toFixed(1)}`).join(" ");
-  const polyP = data.map((d, i) => `${x(i).toFixed(1)},${yP(d.aeroUsd).toFixed(1)}`).join(" ");
+  const polyP = data
+    .map((d, i) => `${x(i).toFixed(1)},${yP(d.aeroUsd).toFixed(1)}`)
+    .join(" ");
 
   const colors = {
     actual: "#666",
@@ -252,7 +254,8 @@ function buildSvg(data: EpochSummary[], id: string): string {
   const epochMin = data[0].epochNum;
   const epochMax = data[data.length - 1].epochNum;
   const epochRange = epochMax - epochMin;
-  const epochStep = epochRange <= 8 ? 1 : epochRange <= 30 ? 5 : epochRange <= 60 ? 10 : 20;
+  const epochStep =
+    epochRange <= 8 ? 1 : epochRange <= 30 ? 5 : epochRange <= 60 ? 10 : 20;
   const firstTick = Math.ceil(epochMin / epochStep) * epochStep;
   const epochByNum = new Map(data.map((d, i) => [d.epochNum, i]));
   const xIndices: number[] = [];
@@ -265,7 +268,9 @@ function buildSvg(data: EpochSummary[], id: string): string {
   const gridLines = ticks
     .map(
       (v) =>
-        `<line x1="${ml}" x2="${W - mr}" y1="${yE(v).toFixed(1)}" y2="${yE(v).toFixed(1)}" stroke="#d1d5db" stroke-width="0.6"/>`
+        `<line x1="${ml}" x2="${W - mr}" y1="${yE(v).toFixed(1)}" y2="${yE(
+          v
+        ).toFixed(1)}" stroke="#d1d5db" stroke-width="0.6"/>`
     )
     .join("");
 
@@ -275,7 +280,9 @@ function buildSvg(data: EpochSummary[], id: string): string {
       const kVal = v / 1000;
       const kStr = kVal % 1 === 0 ? kVal.toFixed(0) : kVal.toFixed(1);
       const label = v === 0 ? "0" : `${kStr}k / ${kStr}%`;
-      return `<text x="${ml - 6}" y="${yE(v).toFixed(1)}" text-anchor="end" dominant-baseline="middle" fill="#555" font-size="14">${label}</text>`;
+      return `<text x="${ml - 6}" y="${yE(v).toFixed(
+        1
+      )}" text-anchor="end" dominant-baseline="middle" fill="#555" font-size="14">${label}</text>`;
     })
     .join("");
 
@@ -287,7 +294,9 @@ function buildSvg(data: EpochSummary[], id: string): string {
       endDate.setUTCDate(endDate.getUTCDate() + 7);
       const end = endDate.toISOString().slice(0, 10); // YYYY-MM-DD
       return `<g transform="translate(${x(i).toFixed(1)},${mt + ph + 6})">
-        <text text-anchor="middle" dominant-baseline="hanging" fill="#555" font-size="13">Epoch ${d.epochNum}</text>
+        <text text-anchor="middle" dominant-baseline="hanging" fill="#555" font-size="13">Epoch ${
+          d.epochNum
+        }</text>
         <text text-anchor="middle" y="17" dominant-baseline="hanging" fill="#888" font-size="13">${end}</text>
       </g>`;
     })
@@ -310,48 +319,70 @@ function buildSvg(data: EpochSummary[], id: string): string {
   const legendY = 6;
   const aeroX = labelColW + strategies.length * colW + gap;
   const ll = (cx: number, cy: number, color: string, extra = "") =>
-    `<line x1="${cx - 14}" y1="${cy}" x2="${cx + 14}" y2="${cy}" stroke="${color}" ${extra}/>`;
+    `<line x1="${cx - 14}" y1="${cy}" x2="${
+      cx + 14
+    }" y2="${cy}" stroke="${color}" ${extra}/>`;
   // Use the exact same stroke styles as the data polylines
   const earnStyle = `stroke-width="1.8"`;
   const aprStyle = `stroke-width="1.5"`;
   const aeroStyle = `stroke-width="1.5" stroke-dasharray="6,4"`;
-  const legend = `<g transform="translate(${legendX},${legendY})">` +
+  const legend =
+    `<g transform="translate(${legendX},${legendY})">` +
     // Header row: strategy names
     strategies
       .map(
         (s, i) =>
-          `<text x="${labelColW + i * colW + colW / 2}" y="0" text-anchor="middle" fill="#333" font-size="14" font-weight="600" dominant-baseline="hanging">${s.label}</text>`
+          `<text x="${
+            labelColW + i * colW + colW / 2
+          }" y="0" text-anchor="middle" fill="#333" font-size="14" font-weight="600" dominant-baseline="hanging">${
+            s.label
+          }</text>`
       )
       .join("") +
     // Earnings row
     `<g class="earn-lines">` +
     `<text x="0" y="${rowH}" fill="#555" font-size="13" dominant-baseline="hanging">Earnings</text>` +
     strategies
-      .map((s, i) => ll(labelColW + i * colW + colW / 2, rowH + 6, s.earn, earnStyle))
+      .map((s, i) =>
+        ll(labelColW + i * colW + colW / 2, rowH + 6, s.earn, earnStyle)
+      )
       .join("") +
     `</g>` +
     // APR row
     `<g class="apr-lines">` +
-    `<text x="0" y="${rowH * 2}" fill="#555" font-size="13" dominant-baseline="hanging">APR</text>` +
+    `<text x="0" y="${
+      rowH * 2
+    }" fill="#555" font-size="13" dominant-baseline="hanging">APR</text>` +
     strategies
-      .map((s, i) => ll(labelColW + i * colW + colW / 2, rowH * 2 + 6, s.earn, aprStyle))
+      .map((s, i) =>
+        ll(labelColW + i * colW + colW / 2, rowH * 2 + 6, s.earn, aprStyle)
+      )
       .join("") +
     `</g>` +
     // AERO price (right of grid, vertically centered)
-    `<text x="${aeroX + aeroLegendW / 2}" y="0" text-anchor="middle" fill="#333" font-size="14" font-weight="600" dominant-baseline="hanging">AERO</text>` +
+    `<text x="${
+      aeroX + aeroLegendW / 2
+    }" y="0" text-anchor="middle" fill="#333" font-size="14" font-weight="600" dominant-baseline="hanging">AERO</text>` +
     ll(aeroX + aeroLegendW / 2, rowH + 12, colors.aero, aeroStyle) +
     `</g>`;
 
   // Axis titles
-  const yTitle = `<text transform="rotate(-90)" x="${-(mt + ph / 2)}" y="14" text-anchor="middle" fill="#555" font-size="15" font-weight="600">Earnings (USD) / APR (%)</text>`;
-  const yRightTitle = `<text transform="rotate(90)" x="${mt + ph / 2}" y="${-(W - 14)}" text-anchor="middle" fill="#555" font-size="15" font-weight="600">AERO (USD)</text>`;
+  const yTitle = `<text transform="rotate(-90)" x="${-(
+    mt +
+    ph / 2
+  )}" y="14" text-anchor="middle" fill="#555" font-size="15" font-weight="600">Earnings (USD) / APR (%)</text>`;
+  const yRightTitle = `<text transform="rotate(90)" x="${mt + ph / 2}" y="${-(
+    W - 14
+  )}" text-anchor="middle" fill="#555" font-size="15" font-weight="600">AERO (USD)</text>`;
 
   // Right y-axis ticks and labels (AERO price)
   const aeroTicks = Array.from({ length: 6 }, (_, i) => (i * yMaxAero) / 5);
   const aeroLabels = aeroTicks
     .map((v) => {
       const label = v.toFixed(1);
-      return `<text x="${W - mr + 6}" y="${yP(v).toFixed(1)}" text-anchor="start" dominant-baseline="middle" fill="#555" font-size="14">${label}</text>`;
+      return `<text x="${W - mr + 6}" y="${yP(v).toFixed(
+        1
+      )}" text-anchor="start" dominant-baseline="middle" fill="#555" font-size="14">${label}</text>`;
     })
     .join("");
 
@@ -360,19 +391,25 @@ function buildSvg(data: EpochSummary[], id: string): string {
   const yTickMarks = ticks
     .map(
       (v) =>
-        `<line x1="${ml - tk}" x2="${ml}" y1="${yE(v).toFixed(1)}" y2="${yE(v).toFixed(1)}" stroke="#bbb" stroke-width="1"/>`
+        `<line x1="${ml - tk}" x2="${ml}" y1="${yE(v).toFixed(1)}" y2="${yE(
+          v
+        ).toFixed(1)}" stroke="#bbb" stroke-width="1"/>`
     )
     .join("");
   const yRightTickMarks = aeroTicks
     .map(
       (v) =>
-        `<line x1="${W - mr}" x2="${W - mr + tk}" y1="${yP(v).toFixed(1)}" y2="${yP(v).toFixed(1)}" stroke="#bbb" stroke-width="1"/>`
+        `<line x1="${W - mr}" x2="${W - mr + tk}" y1="${yP(v).toFixed(
+          1
+        )}" y2="${yP(v).toFixed(1)}" stroke="#bbb" stroke-width="1"/>`
     )
     .join("");
   const xTickMarks = xIndices
     .map(
       (i) =>
-        `<line x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${mt + ph}" y2="${mt + ph + tk}" stroke="#bbb" stroke-width="1"/>`
+        `<line x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${
+          mt + ph
+        }" y2="${mt + ph + tk}" stroke="#bbb" stroke-width="1"/>`
     )
     .join("");
 
@@ -383,26 +420,48 @@ function buildSvg(data: EpochSummary[], id: string): string {
     ${gridLines}
     <!-- axes -->
     <line x1="${ml}" x2="${ml}" y1="${mt}" y2="${mt + ph}" stroke="#bbb"/>
-    <line x1="${W - mr}" x2="${W - mr}" y1="${mt}" y2="${mt + ph}" stroke="#bbb"/>
-    <line x1="${ml}" x2="${W - mr}" y1="${mt + ph}" y2="${mt + ph}" stroke="#bbb"/>
+    <line x1="${W - mr}" x2="${W - mr}" y1="${mt}" y2="${
+    mt + ph
+  }" stroke="#bbb"/>
+    <line x1="${ml}" x2="${W - mr}" y1="${mt + ph}" y2="${
+    mt + ph
+  }" stroke="#bbb"/>
     ${yTickMarks}${yRightTickMarks}${xTickMarks}
     ${yLabels}${aeroLabels}${xLabels}
     ${yTitle}${yRightTitle}
     <!-- data lines (clipped to plot area) -->
     <g clip-path="url(#${id}-clip)">
       <g class="apr-lines">
-        <polyline points="${polyA((d) => d.opt10Apr)}" fill="none" stroke="${colors.opt10}" stroke-width="1.5"/>
-        <polyline points="${polyA((d) => d.opt10BcApr)}" fill="none" stroke="${colors.opt10Bc}" stroke-width="1.5"/>
-        <polyline points="${polyA((d) => d.eqBc3Apr)}" fill="none" stroke="${colors.eqBc3}" stroke-width="1.5"/>
-        <polyline points="${polyA((d) => d.actualApr)}" fill="none" stroke="${colors.actual}" stroke-width="1.5"/>
+        <polyline points="${polyA((d) => d.opt10Apr)}" fill="none" stroke="${
+    colors.opt10
+  }" stroke-width="1.5"/>
+        <polyline points="${polyA((d) => d.opt10BcApr)}" fill="none" stroke="${
+    colors.opt10Bc
+  }" stroke-width="1.5"/>
+        <polyline points="${polyA((d) => d.eqBc3Apr)}" fill="none" stroke="${
+    colors.eqBc3
+  }" stroke-width="1.5"/>
+        <polyline points="${polyA((d) => d.actualApr)}" fill="none" stroke="${
+    colors.actual
+  }" stroke-width="1.5"/>
       </g>
       <g class="earn-lines">
-        <polyline points="${polyE((d) => d.opt10Earn)}" fill="none" stroke="${colors.opt10}" stroke-width="1.8"/>
-        <polyline points="${polyE((d) => d.opt10BcEarn)}" fill="none" stroke="${colors.opt10Bc}" stroke-width="1.8"/>
-        <polyline points="${polyE((d) => d.eqBc3Earn)}" fill="none" stroke="${colors.eqBc3}" stroke-width="1.8"/>
-        <polyline points="${polyE((d) => d.actualEarn)}" fill="none" stroke="${colors.actual}" stroke-width="1.8"/>
+        <polyline points="${polyE((d) => d.opt10Earn)}" fill="none" stroke="${
+    colors.opt10
+  }" stroke-width="1.8"/>
+        <polyline points="${polyE((d) => d.opt10BcEarn)}" fill="none" stroke="${
+    colors.opt10Bc
+  }" stroke-width="1.8"/>
+        <polyline points="${polyE((d) => d.eqBc3Earn)}" fill="none" stroke="${
+    colors.eqBc3
+  }" stroke-width="1.8"/>
+        <polyline points="${polyE((d) => d.actualEarn)}" fill="none" stroke="${
+    colors.actual
+  }" stroke-width="1.8"/>
       </g>
-      <polyline points="${polyP}" fill="none" stroke="${colors.aero}" stroke-width="1.5" stroke-dasharray="6,4"/>
+      <polyline points="${polyP}" fill="none" stroke="${
+    colors.aero
+  }" stroke-width="1.5" stroke-dasharray="6,4"/>
     </g>
   </svg>`;
 }
@@ -410,9 +469,7 @@ function buildSvg(data: EpochSummary[], id: string): string {
 // Build chart variants with independent y-scales
 const oneYearAgo = new Date();
 oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-const last1yData = epochSummaries.filter(
-  (d) => new Date(d.date) >= oneYearAgo
-);
+const last1yData = epochSummaries.filter((d) => new Date(d.date) >= oneYearAgo);
 const oneMonthAgo = new Date();
 oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
 const last1mData = epochSummaries.filter(
@@ -527,7 +584,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
     })
     .join("\n");
 
-  sections.push(`  <details${i === 0 ? " open" : ""}>
+  sections.push(`  <details>
     <summary>Epoch ${first.epoch_number} ${epochTiming}</summary>
     <div class="scroll">
       <table>
@@ -565,7 +622,67 @@ for (let i = 0; i < sortedEpochs.length; i++) {
   </details>`);
 }
 
-// 5. Write index.html
+// 5b. Build strategy votes for latest epoch
+const latestRecords = sortedEpochs[0]?.[1] ?? [];
+const latestFirst = latestRecords[0];
+const latestEpochHeading = `Epoch ${latestFirst.epoch_number} as of ${new Date()
+  .toISOString()
+  .replace("T", " ")
+  .replace(/:\d{2}\.\d+Z$/, " UTC")}`;
+
+const buildVoteList = (
+  label: string,
+  voteFn: (r: EpochRecord) => number,
+  pctFn: (r: EpochRecord) => number,
+  earnFn: (r: EpochRecord) => number
+) => {
+  const items = latestRecords
+    .filter((r) => Math.round(pctFn(r)) > 0)
+    .sort((a, b) => pctFn(b) - pctFn(a))
+    .map(
+      (r) =>
+        `        <li>${escapeHtml(r.pool_name)} \u2013 ${Math.round(
+          pctFn(r)
+        )}%</li>`
+    )
+    .join("\n");
+  if (!items) return "";
+  const totalEarn = latestRecords.reduce((s, r) => s + earnFn(r), 0);
+  return `      <div class="vote-strategy"><strong>${label}</strong><ul>\n${items}\n      </ul><p class="vote-earnings">Earnings: ${usdFmt(
+    totalEarn
+  )}</p></div>`;
+};
+
+const strategyVotesHtml = [
+  buildVoteList(
+    "Current Votes",
+    (r) => r.actual_votes,
+    (r) => r.actual_vote_pct,
+    (r) => r.actual_earnings_usd
+  ),
+  buildVoteList(
+    "EqBC3 Votes",
+    (r) => r.eq_bc3_votes,
+    (r) => r.eq_bc3_vote_pct,
+    (r) => r.eq_bc3_earnings_usd
+  ),
+  buildVoteList(
+    "Opt10BC Votes",
+    (r) => r.opt_10bc_votes,
+    (r) => r.opt_10bc_vote_pct,
+    (r) => r.opt_10bc_earnings_usd
+  ),
+  buildVoteList(
+    "Opt10 Votes",
+    (r) => r.opt_10_votes,
+    (r) => r.opt_10_vote_pct,
+    (r) => r.opt_10_earnings_usd
+  ),
+]
+  .filter(Boolean)
+  .join("\n");
+
+// 6. Write index.html
 const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -598,6 +715,16 @@ const html = `<!DOCTYPE html>
     .new { background: #e6f4ea; }
     .tags { display: flex; gap: .2rem; flex-wrap: wrap; }
     .tags span { background: #e8e8e8; padding: .1rem .3rem; border-radius: 3px; font-size: .75rem; }
+    /* Strategy votes */
+    .strategy-votes { margin-bottom: 1rem; }
+    .strategy-votes h2 { font-size: 1.1rem; margin-bottom: .4rem; }
+    .strategy-votes > p { font-size: .85rem; color: #555; margin-bottom: .6rem; }
+    .strategy-votes .vote-strategy { margin-bottom: .5rem; font-size: .85rem; }
+    .strategy-votes ul { list-style: none; padding: 0; font-variant-numeric: tabular-nums; }
+    .strategy-votes li { padding: .15rem 0; }
+    .vote-strategy { display: inline-block; vertical-align: top; margin-right: 2rem; }
+    .vote-strategy strong { display: block; margin-bottom: .2rem; }
+    .vote-earnings { margin-top: .3rem; font-weight: 600; font-variant-numeric: tabular-nums; }
     /* Chart toggle */
     .chart-wrap { margin-bottom: 1rem; overflow: hidden; resize: horizontal; width: min(1200px, 100%); }
     .chart-wrap > input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
@@ -630,10 +757,10 @@ const html = `<!DOCTYPE html>
     <p>This dashboard tracks weekly earnings from a voter on <a href="https://aerodrome.finance">Aerodrome Finance</a> and compares the voter's actual results against alternative allocation strategies. Each epoch lasts one week; the voter locks AERO tokens and distributes votes across liquidity pools to earn a share of each pool's fees and bribes, proportional to their vote share.</p>
     <p>The chart below plots actual and predicted earnings and APR per epoch. Four voting strategies are shown:</p>
     <ul>
-      <li><strong>Actual</strong> \u2014 the voter's real vote allocation and resulting earnings.</li>
-      <li><strong>EqBC3</strong> \u2014 votes split equally across the top 3 blue-chip pools by fees + bribes.</li>
-      <li><strong>Opt10BC</strong> \u2014 votes optimally allocated across up to 10 blue-chip pools to maximize earnings (water-filling optimization).</li>
-      <li><strong>Opt10</strong> \u2014 same optimization but across all pools, not limited to blue chips.</li>
+      <li><strong>Actual</strong> \u2013 the voter's real vote allocation and resulting earnings.</li>
+      <li><strong>EqBC3</strong> \u2013 votes split equally across the top 3 blue-chip pools by fees + bribes.</li>
+      <li><strong>Opt10BC</strong> \u2013 votes optimally allocated across up to 10 blue-chip pools to maximize earnings (water-filling optimization).</li>
+      <li><strong>Opt10</strong> \u2013 same optimization but across all pools, not limited to blue chips.</li>
     </ul>
   </div>
   <div class="chart-wrap">
@@ -659,6 +786,11 @@ const html = `<!DOCTYPE html>
     <div class="chart-6m-wrap">${svg6m}</div>
     <div class="chart-1y-wrap">${svg1y}</div>
     <div class="chart-all-wrap">${svgAll}</div>
+  </div>
+  <div class="strategy-votes">
+    <h2>${latestEpochHeading}</h2>
+    <p>Vote allocation across pools for each strategy in the current epoch.</p>
+${strategyVotesHtml}
   </div>
   <p class="intro">The tables below shows the per-pool breakdown for every strategy for each epoch. Pool types are color-coded: <span class="bluechip">blue chip</span>, <span class="stablecoin">stable</span>, <span class="aero">aero</span>, and <span class="new">new</span>.</p>
 ${sections.join("\n")}
