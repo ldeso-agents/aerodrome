@@ -140,9 +140,10 @@ async function postJson(url: string, body: object): Promise<any> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (resp.status === 429)
-      throw Object.assign(new Error("429"), { status: 429 });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
+    if (!resp.ok)
+      throw Object.assign(new Error(`HTTP ${resp.status} from ${url}`), {
+        status: resp.status,
+      });
     return resp.json();
   }, url);
 }
@@ -224,8 +225,9 @@ async function fetchHistoricalPrices(
   alchemyKey: string,
   tokenRanges: Map<string, { startTs: number; endTs: number }>,
   tokenMap: Map<string, TokenMeta>
-): Promise<PriceMap> {
+): Promise<{ prices: PriceMap; failedTokens: Set<string> }> {
   const prices: PriceMap = new Map();
+  const failedTokens = new Set<string>();
   const ONE_YEAR_S = 364 * DAY;
 
   let i = 0;
@@ -254,15 +256,21 @@ async function fetchHistoricalPrices(
         for (const pt of json.data ?? []) {
           dateMap.set(pt.timestamp.slice(0, 10), parseFloat(pt.value));
         }
-      } catch (e) {
+      } catch (e: any) {
+        if (e?.status === 400) {
+          failedTokens.add(addr);
+        }
         const sym = tokenMap.get(addr)?.symbol ?? addr;
         console.warn(`  Skipping prices for ${sym}: ${e}`);
         break;
       }
     }
   }
-  return prices;
+  return { prices, failedTokens };
 }
+
+/** Price of -1 is a sentinel meaning "Alchemy cannot provide this price" */
+const UNKNOWN_PRICE = -1;
 
 function loadPricesCsv(): PriceMap {
   const prices: PriceMap = new Map();
@@ -820,10 +828,10 @@ async function main() {
 
     console.log(`Fetching prices for ${tokenRanges.size} tokens…`);
 
-    const fetched =
+    const { prices: fetched, failedTokens } =
       tokenRanges.size > 0
         ? await fetchHistoricalPrices(alchemyKey, tokenRanges, tokens)
-        : new Map();
+        : { prices: new Map() as PriceMap, failedTokens: new Set<string>() };
 
     // Build combined price map (cache + fetched) and update cache for completed epochs
     const priceMap: PriceMap = new Map();
@@ -834,10 +842,21 @@ async function main() {
       priceMap.set(token, merged);
       for (const date of dates) {
         const price = fresh?.get(date) ?? cached?.get(date);
-        if (price === undefined) continue;
+        if (price === undefined || price === UNKNOWN_PRICE) continue;
         merged.set(date, price);
         if (completedDates.has(date) && !cached?.has(date)) {
           getOrSet(cachedPrices, token, () => new Map()).set(date, price);
+        }
+      }
+      // Cache UNKNOWN_PRICE for tokens that got permanent errors (HTTP 400)
+      if (failedTokens.has(token)) {
+        for (const date of completedDates) {
+          if (!cached?.has(date)) {
+            getOrSet(cachedPrices, token, () => new Map()).set(
+              date,
+              UNKNOWN_PRICE
+            );
+          }
         }
       }
     }
