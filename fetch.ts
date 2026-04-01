@@ -400,7 +400,7 @@ async function main() {
       const epochTs = Math.floor(
         new Date(epochDate + "T00:00:00Z").getTime() / 1000
       );
-      if (epochTs + WEEK > nowTs) continue;
+      if (epochTs + 2 * WEEK > nowTs) continue;
       if (voterVotes > 0)
         getOrSet(voterVotesByEpoch, epochTs, () => new Map()).set(
           pool,
@@ -577,8 +577,9 @@ async function main() {
   // Carry-forward per-tokenId votes across gap epochs and aggregate
   {
     const allEpochTimestamps = [...byEpoch.keys()].sort((a, b) => a - b);
+    const currentEpochTs = nowTs - (nowTs % WEEK);
     let totalCarried = 0;
-    for (const [, epochMap] of tokenVotes) {
+    for (const [tokenId, epochMap] of tokenVotes) {
       const votedEpochs = [...epochMap.keys()].sort((a, b) => a - b);
       if (votedEpochs.length === 0) continue;
       const firstVote = votedEpochs[0];
@@ -593,6 +594,18 @@ async function main() {
           epochMap.set(ts, new Map(lastPoolWeights));
           totalCarried++;
         }
+      }
+      // For owned tokens, carry forward to the current epoch only if votes
+      // were active in the last completed epoch (ensuring continuity).
+      const lastCompletedEpoch = currentEpochTs - WEEK;
+      if (
+        lastPoolWeights &&
+        ownedTokenIds.has(tokenId) &&
+        !epochMap.has(currentEpochTs) &&
+        epochMap.has(lastCompletedEpoch)
+      ) {
+        epochMap.set(currentEpochTs, new Map(lastPoolWeights));
+        totalCarried++;
       }
     }
 
