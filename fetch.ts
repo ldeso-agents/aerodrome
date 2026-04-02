@@ -307,6 +307,30 @@ function savePricesCsv(
   writeFileSync("prices.csv", lines.join("\n") + "\n");
 }
 
+function loadTokensCsv(): Map<string, TokenMeta> {
+  const tokens = new Map<string, TokenMeta>();
+  if (!existsSync("tokens.csv")) return tokens;
+  const lines = readFileSync("tokens.csv", "utf-8").trimEnd().split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    const [addr, symbol, decimalsStr] = lines[i].split(",");
+    const decimals = parseInt(decimalsStr);
+    if (!addr || !symbol || isNaN(decimals)) continue;
+    tokens.set(addr, { symbol, decimals });
+  }
+  return tokens;
+}
+
+function saveTokensCsv(tokens: Map<string, TokenMeta>): void {
+  const rows = [...tokens.entries()]
+    .map(([addr, meta]) => ({ addr, ...meta }))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
+  const lines = ["token_address,symbol,decimals"];
+  for (const r of rows) {
+    lines.push(`${r.addr},${r.symbol},${r.decimals}`);
+  }
+  writeFileSync("tokens.csv", lines.join("\n") + "\n");
+}
+
 // -- Main --
 
 async function main() {
@@ -349,6 +373,9 @@ async function main() {
   console.log(`  ${pools.size} pools`);
 
   // 2. Fetch all tokens for fee/bribe symbol resolution
+  const cachedTokens = loadTokensCsv();
+  console.log(`Loaded ${cachedTokens.size} cached tokens from tokens.csv`);
+
   console.log("Fetching tokens…");
   const tokenPages = await fetchAllPages<{
     token_address: Address;
@@ -360,14 +387,19 @@ async function main() {
     functionName: "tokens",
     extraArgs: [ZERO, []],
   });
-  const tokens = new Map<string, TokenMeta>();
+  const tokens = new Map<string, TokenMeta>(cachedTokens);
+  let newTokenCount = 0;
   for (const t of tokenPages) {
-    tokens.set(t.token_address.toLowerCase(), {
+    const addr = t.token_address.toLowerCase();
+    if (!tokens.has(addr)) newTokenCount++;
+    tokens.set(addr, {
       symbol: t.symbol,
       decimals: t.decimals,
     });
   }
-  console.log(`  ${tokens.size} tokens`);
+  console.log(
+    `  ${tokenPages.length} on-chain tokens (${newTokenCount} new), ${tokens.size} total`
+  );
 
   // 3. Fetch latest epochs from RewardsSugar.epochsLatest (paginated)
   console.log("Fetching latest epochs…");
@@ -718,6 +750,10 @@ async function main() {
       );
     }
   }
+
+  // Save token metadata cache
+  saveTokensCsv(tokens);
+  console.log(`Saved ${tokens.size} tokens to tokens.csv`);
 
   // 9. Build entry records from selected pools (top 30 + voter-voted)
   const entries: {

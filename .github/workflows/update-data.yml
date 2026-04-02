@@ -36,7 +36,7 @@ jobs:
           npm run build
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add index.html prices.csv votes.csv
+          git add index.html prices.csv tokens.csv votes.csv
           git diff --staged --quiet || (git commit -m 'chore: update voting data' && git push)
       - run: tar -cvf '${{ runner.temp }}/artifact.tar' index.html votes.csv
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7

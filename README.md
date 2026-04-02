@@ -47,9 +47,10 @@ Reads `votes.csv` and generates `index.html`.
 
 ## Outputs
 
-- **`votes.csv`** — Full CSV export (votes, fees, bribes, earnings in USD).
 - **`index.html`** — HTML dashboard.
+- **`votes.csv`** — Full CSV export (votes, fees, bribes, earnings in USD).
 - **`prices.csv`** — Cached historical token prices to minimize API calls.
+- **`tokens.csv`** — Cached token symbols and decimals to minimize API calls.
 
 ## How It Works
 
