@@ -195,8 +195,8 @@ for (const [epochNum, entries] of byEpoch) {
   const actualVotes = entries.map(({ record: r }) => r.actual_votes);
   const actualEarnings = computeEarnings(pools, actualVotes);
 
-  // 2. Equal split among top 3 bluechip pools (by fees+bribes)
-  const bluechipIndices = entries
+  // 2. Proportional split among top 3 bluechip pools (by fees+bribes)
+  const topBluechips = entries
     .map(({ record: r }, j) => ({
       j,
       reward: r.fees_bribes_usd,
@@ -204,13 +204,13 @@ for (const [epochNum, entries] of byEpoch) {
     }))
     .filter((x) => x.type === "bluechip")
     .sort((a, b) => b.reward - a.reward)
-    .slice(0, 3)
-    .map((x) => x.j);
+    .slice(0, 3);
 
   const eqBc3Votes = pools.map(() => 0);
-  if (bluechipIndices.length > 0 && voterTotal > 0) {
-    const perPool = voterTotal / bluechipIndices.length;
-    for (const j of bluechipIndices) eqBc3Votes[j] = perPool;
+  const totalReward = topBluechips.reduce((s, x) => s + x.reward, 0);
+  if (topBluechips.length > 0 && voterTotal > 0 && totalReward > 0) {
+    for (const x of topBluechips)
+      eqBc3Votes[x.j] = voterTotal * (x.reward / totalReward);
   }
   const eqBc3Earnings = computeEarnings(pools, eqBc3Votes);
 
@@ -322,6 +322,6 @@ for (const [actual, ebc3, o10bc, o10] of strategies) {
 
 console.log("Voting analysis complete:");
 console.log(`  Actual earnings:       $${round(totalActual)}`);
-console.log(`  Equal BC top-3:        $${round(totalEqBc3)}`);
+console.log(`  Proportional BC top-3: $${round(totalEqBc3)}`);
 console.log(`  Optimal BC (10 pools): $${round(totalOpt10Bc)}`);
 console.log(`  Optimal (10 pools):    $${round(totalOpt10)}`);

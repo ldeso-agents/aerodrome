@@ -772,7 +772,7 @@ const html = `<!DOCTYPE html>
     <p>The chart below plots actual and predicted earnings and APR per epoch. Four voting strategies are shown:</p>
     <ul>
       <li><strong>Actual</strong> \u2013 the voter's real vote allocation and resulting earnings.</li>
-      <li><strong>EqBC3</strong> \u2013 votes split equally across the top 3 blue-chip pools by fees + bribes.</li>
+      <li><strong>EqBC3</strong> \u2013 votes split proportionally across the top 3 blue-chip pools by fees + bribes.</li>
       <li><strong>Opt10BC</strong> \u2013 votes optimally allocated across up to 10 blue-chip pools to maximize earnings (water-filling optimization).</li>
       <li><strong>Opt10</strong> \u2013 same optimization but across all pools, not limited to blue chips.</li>
     </ul>
