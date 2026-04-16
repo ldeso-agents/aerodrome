@@ -26,7 +26,7 @@ passed to track a specific account. When omitted, the default address
 Reads `votes.csv` and computes hypothetical voting strategies for each epoch:
 
 - **Actual** — the voter's real earnings based on their votes.
-- **EqBC3** — equal votes across the top 3 blue-chip pools.
+- **PropBC5** — votes split proportionally across the top 5 blue-chip + stable pools by fees + bribes.
 - **Opt10BC** — optimal votes across 10 blue-chip pools.
 - **Opt10** — optimal votes across any 10 pools.
 

@@ -26,9 +26,9 @@ type EpochRecord = {
   actual_votes_total: number;
   actual_vote_pct: number;
   actual_earnings_usd: number;
-  eq_bc3_votes: number;
-  eq_bc3_vote_pct: number;
-  eq_bc3_earnings_usd: number;
+  prop_bc5_votes: number;
+  prop_bc5_vote_pct: number;
+  prop_bc5_earnings_usd: number;
   opt_10bc_votes: number;
   opt_10bc_vote_pct: number;
   opt_10bc_earnings_usd: number;
@@ -101,9 +101,9 @@ for (let i = 1; i < lines.length; i++) {
     actual_votes_total: p("actual_votes_total", c),
     actual_vote_pct: p("actual_vote_pct", c),
     actual_earnings_usd: p("actual_earnings_usd", c),
-    eq_bc3_votes: p("eq_bc3_votes", c),
-    eq_bc3_vote_pct: p("eq_bc3_vote_pct", c),
-    eq_bc3_earnings_usd: p("eq_bc3_earnings_usd", c),
+    prop_bc5_votes: p("prop_bc5_votes", c),
+    prop_bc5_vote_pct: p("prop_bc5_vote_pct", c),
+    prop_bc5_earnings_usd: p("prop_bc5_earnings_usd", c),
     opt_10bc_votes: p("opt_10bc_votes", c),
     opt_10bc_vote_pct: p("opt_10bc_vote_pct", c),
     opt_10bc_earnings_usd: p("opt_10bc_earnings_usd", c),
@@ -146,11 +146,11 @@ type EpochSummary = {
   epochNum: number;
   aeroUsd: number;
   actualEarn: number;
-  eqBc3Earn: number;
+  propBc5Earn: number;
   opt10BcEarn: number;
   opt10Earn: number;
   actualApr: number;
-  eqBc3Apr: number;
+  propBc5Apr: number;
   opt10BcApr: number;
   opt10Apr: number;
 };
@@ -162,10 +162,10 @@ for (const [ts, epochRecords] of byEpoch) {
   const sum = (fn: (r: EpochRecord) => number) =>
     epochRecords.reduce((s, r) => s + fn(r), 0);
   const actualEarn = sum((r) => r.actual_earnings_usd);
-  const eqBc3Earn = sum((r) => r.eq_bc3_earnings_usd);
+  const propBc5Earn = sum((r) => r.prop_bc5_earnings_usd);
   const opt10BcEarn = sum((r) => r.opt_10bc_earnings_usd);
   const opt10Earn = sum((r) => r.opt_10_earnings_usd);
-  const eqBc3Votes = sum((r) => r.eq_bc3_votes);
+  const propBc5Votes = sum((r) => r.prop_bc5_votes);
   const opt10BcVotes = sum((r) => r.opt_10bc_votes);
   const opt10Votes = sum((r) => r.opt_10_votes);
 
@@ -174,11 +174,11 @@ for (const [ts, epochRecords] of byEpoch) {
     epochNum: first.epoch_number,
     aeroUsd: first.aero_usd,
     actualEarn,
-    eqBc3Earn,
+    propBc5Earn,
     opt10BcEarn,
     opt10Earn,
     actualApr: apr(actualEarn, trueActualVotes, first.aero_usd),
-    eqBc3Apr: apr(eqBc3Earn, eqBc3Votes, first.aero_usd),
+    propBc5Apr: apr(propBc5Earn, propBc5Votes, first.aero_usd),
     opt10BcApr: apr(opt10BcEarn, opt10BcVotes, first.aero_usd),
     opt10Apr: apr(opt10Earn, opt10Votes, first.aero_usd),
   });
@@ -203,10 +203,10 @@ function buildSvg(data: EpochSummary[], id: string): string {
 
   // Scales — unified: $100k earnings ≡ 100% APR (ratio: $1k per 1%)
   const maxEarn = Math.max(
-    ...data.map((d) => Math.max(d.actualEarn, d.eqBc3Earn, d.opt10BcEarn))
+    ...data.map((d) => Math.max(d.actualEarn, d.propBc5Earn, d.opt10BcEarn))
   );
   const maxApr = Math.max(
-    ...data.map((d) => Math.max(d.actualApr, d.eqBc3Apr, d.opt10BcApr))
+    ...data.map((d) => Math.max(d.actualApr, d.propBc5Apr, d.opt10BcApr))
   );
   const yMax = niceMax(Math.max(maxEarn, maxApr * 1000));
 
@@ -241,7 +241,7 @@ function buildSvg(data: EpochSummary[], id: string): string {
 
   const colors = {
     actual: "#666",
-    eqBc3: "#3b82f6",
+    propBc5: "#3b82f6",
     opt10Bc: "#22a34a",
     opt10: "#ca8a04",
     aero: "#dc2626",
@@ -308,7 +308,7 @@ function buildSvg(data: EpochSummary[], id: string): string {
   // Legend (grid: rows = Earnings/APR, columns = strategies)
   const strategies = [
     { label: "Actual", earn: colors.actual },
-    { label: "EqBC3", earn: colors.eqBc3 },
+    { label: "PropBC5", earn: colors.propBc5 },
     { label: "Opt10BC", earn: colors.opt10Bc },
     { label: "Opt10", earn: colors.opt10 },
   ];
@@ -441,8 +441,8 @@ function buildSvg(data: EpochSummary[], id: string): string {
         <polyline points="${polyA((d) => d.opt10BcApr)}" fill="none" stroke="${
     colors.opt10Bc
   }" stroke-width="1.5"/>
-        <polyline points="${polyA((d) => d.eqBc3Apr)}" fill="none" stroke="${
-    colors.eqBc3
+        <polyline points="${polyA((d) => d.propBc5Apr)}" fill="none" stroke="${
+    colors.propBc5
   }" stroke-width="1.5"/>
         <polyline points="${polyA((d) => d.actualApr)}" fill="none" stroke="${
     colors.actual
@@ -455,8 +455,8 @@ function buildSvg(data: EpochSummary[], id: string): string {
         <polyline points="${polyE((d) => d.opt10BcEarn)}" fill="none" stroke="${
     colors.opt10Bc
   }" stroke-width="1.8"/>
-        <polyline points="${polyE((d) => d.eqBc3Earn)}" fill="none" stroke="${
-    colors.eqBc3
+        <polyline points="${polyE((d) => d.propBc5Earn)}" fill="none" stroke="${
+    colors.propBc5
   }" stroke-width="1.8"/>
         <polyline points="${polyE((d) => d.actualEarn)}" fill="none" stroke="${
     colors.actual
@@ -514,15 +514,15 @@ for (let i = 0; i < sortedEpochs.length; i++) {
   const totalPoolFeesBribes = sum((r) => r.fees_bribes_usd);
   const totalPoolApr = apr(totalPoolFeesBribes, totalPoolVotes, first.aero_usd);
   const totalActualEarn = sum((r) => r.actual_earnings_usd);
-  const totalEqBc3Votes = sum((r) => r.eq_bc3_votes);
-  const totalEqBc3Earn = sum((r) => r.eq_bc3_earnings_usd);
+  const totalPropBc5Votes = sum((r) => r.prop_bc5_votes);
+  const totalPropBc5Earn = sum((r) => r.prop_bc5_earnings_usd);
   const totalOpt10BcVotes = sum((r) => r.opt_10bc_votes);
   const totalOpt10BcEarn = sum((r) => r.opt_10bc_earnings_usd);
   const totalOpt10Votes = sum((r) => r.opt_10_votes);
   const totalOpt10Earn = sum((r) => r.opt_10_earnings_usd);
 
   const totalActualApr = apr(totalActualEarn, trueActualVotes, first.aero_usd);
-  const totalEqBc3Apr = apr(totalEqBc3Earn, totalEqBc3Votes, first.aero_usd);
+  const totalPropBc5Apr = apr(totalPropBc5Earn, totalPropBc5Votes, first.aero_usd);
   const totalOpt10BcApr = apr(
     totalOpt10BcEarn,
     totalOpt10BcVotes,
@@ -551,9 +551,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td class="sep right">${fmt(trueActualVotes)}</td>
             <td class="right">${totalActualApr.toFixed(2)}%</td>
             <td class="right">${usdFmt(totalActualEarn)}</td>
-            <td class="sep right">${fmt(totalEqBc3Votes)}</td>
-            <td class="right">${totalEqBc3Apr.toFixed(2)}%</td>
-            <td class="right">${usdFmt(totalEqBc3Earn)}</td>
+            <td class="sep right">${fmt(totalPropBc5Votes)}</td>
+            <td class="right">${totalPropBc5Apr.toFixed(2)}%</td>
+            <td class="right">${usdFmt(totalPropBc5Earn)}</td>
             <td class="sep right">${fmt(totalOpt10BcVotes)}</td>
             <td class="right">${totalOpt10BcApr.toFixed(2)}%</td>
             <td class="right">${usdFmt(totalOpt10BcEarn)}</td>
@@ -586,9 +586,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td class="sep right">${fmt(r.actual_votes)}</td>
             <td class="right">${r.actual_vote_pct.toFixed(2)}%</td>
             <td class="right">${usdFmt(r.actual_earnings_usd)}</td>
-            <td class="sep right">${fmt(r.eq_bc3_votes)}</td>
-            <td class="right">${r.eq_bc3_vote_pct.toFixed(2)}%</td>
-            <td class="right">${usdFmt(r.eq_bc3_earnings_usd)}</td>
+            <td class="sep right">${fmt(r.prop_bc5_votes)}</td>
+            <td class="right">${r.prop_bc5_vote_pct.toFixed(2)}%</td>
+            <td class="right">${usdFmt(r.prop_bc5_earnings_usd)}</td>
             <td class="sep right">${fmt(r.opt_10bc_votes)}</td>
             <td class="right">${r.opt_10bc_vote_pct.toFixed(2)}%</td>
             <td class="right">${usdFmt(r.opt_10bc_earnings_usd)}</td>
@@ -617,7 +617,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <th class="sep right">${i === 0 ? "Current" : "Actual"} Votes</th>
             <th class="right">%</th>
             <th class="right">Earned</th>
-            <th class="sep right">EqBC3 Votes</th>
+            <th class="sep right">PropBC5 Votes</th>
             <th class="right">%</th>
             <th class="right">Earned</th>
             <th class="sep right">Opt10BC Votes</th>
@@ -675,10 +675,10 @@ const strategyVotesHtml = [
     (r) => r.actual_earnings_usd
   ),
   buildVoteList(
-    "EqBC3 Votes",
-    (r) => r.eq_bc3_votes,
-    (r) => r.eq_bc3_vote_pct,
-    (r) => r.eq_bc3_earnings_usd
+    "PropBC5 Votes",
+    (r) => r.prop_bc5_votes,
+    (r) => r.prop_bc5_vote_pct,
+    (r) => r.prop_bc5_earnings_usd
   ),
   buildVoteList(
     "Opt10BC Votes",
@@ -772,7 +772,7 @@ const html = `<!DOCTYPE html>
     <p>The chart below plots actual and predicted earnings and APR per epoch. Four voting strategies are shown:</p>
     <ul>
       <li><strong>Actual</strong> \u2013 the voter's real vote allocation and resulting earnings.</li>
-      <li><strong>EqBC3</strong> \u2013 votes split equally across the top 3 blue-chip pools by fees + bribes.</li>
+      <li><strong>PropBC5</strong> \u2013 votes split proportionally across the top 5 blue-chip + stable pools by fees + bribes.</li>
       <li><strong>Opt10BC</strong> \u2013 votes optimally allocated across up to 10 blue-chip pools to maximize earnings (water-filling optimization).</li>
       <li><strong>Opt10</strong> \u2013 same optimization but across all pools, not limited to blue chips.</li>
     </ul>
