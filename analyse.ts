@@ -266,10 +266,8 @@ const analysisFields = [
   "opt_10_earnings_usd",
 ];
 
-// Legacy columns to strip on rewrite (from renamed strategies)
-const staleFields = ["eq_bc3_votes", "eq_bc3_vote_pct", "eq_bc3_earnings_usd"];
-const removeSet = new Set([...analysisFields, ...staleFields]);
-const cleanHeader = header.filter((h) => !removeSet.has(h));
+const analysisSet = new Set(analysisFields);
+const cleanHeader = header.filter((h) => !analysisSet.has(h));
 const outHeader = [...cleanHeader, ...analysisFields];
 
 const stringFields = new Set([
@@ -285,7 +283,7 @@ const stringFields = new Set([
 const outLines = [outHeader.join(",")];
 for (let i = 0; i < rows.length; i++) {
   const cleanIndices = header
-    .map((h, j) => (removeSet.has(h) ? -1 : j))
+    .map((h, j) => (analysisSet.has(h) ? -1 : j))
     .filter((j) => j >= 0);
   const baseValues = cleanIndices.map((j) => {
     const v = rows[i][j];
