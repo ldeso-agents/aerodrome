@@ -64,6 +64,11 @@ const poolTypeLabel: Record<string, string> = {
   new: "new",
 };
 
+const isStablecoinSymbol = (s: string) => /USD|EUR/i.test(s);
+const isBluechipSymbol = (s: string) => /BTC|ETH|SOL|XRP/i.test(s);
+const isHighlightedToken = (s: string) =>
+  isStablecoinSymbol(s) || isBluechipSymbol(s);
+
 // -- Main --
 
 // 1. Parse votes.csv
@@ -571,12 +576,19 @@ for (let i = 0; i < sortedEpochs.length; i++) {
       const cls = poolTypeLabel[r.pool_type] ? r.pool_type : "";
       const pt = cls ? ` class="${cls}"` : "";
       const ptr = cls ? ` class="${cls} right"` : ` class="right"`;
-      const bribeTag =
-        r.bribe_tokens.length > 0
-          ? `<span>${escapeHtml(r.bribe_tokens[0])}${
-              r.bribe_tokens.length > 1 ? "\u2026" : ""
-            }</span>`
-          : "";
+      let bribeTag = "";
+      if (r.bribe_tokens.length === 1) {
+        bribeTag = `<span>${escapeHtml(r.bribe_tokens[0])}</span>`;
+      } else if (r.bribe_tokens.length > 1) {
+        const highlighted = r.bribe_tokens.filter(isHighlightedToken);
+        const shown =
+          highlighted.length > 0 ? highlighted : [r.bribe_tokens[0]];
+        const spans = shown
+          .map((t) => `<span>${escapeHtml(t)}</span>`)
+          .join("");
+        bribeTag =
+          spans + (shown.length < r.bribe_tokens.length ? "\u2026" : "");
+      }
       return `        <tr data-reward="${r.fees_bribes_usd}" data-other-votes="${r.pool_votes - r.actual_votes}">
             <td${pt}>${j + 1}</td>
             <td${pt}>${escapeHtml(r.pool_name)}</td>
@@ -731,8 +743,8 @@ const html = `<!DOCTYPE html>
     .stablecoin { background: #efefef; }
     .aero { background: #ffedeb; }
     .new { background: #e6f4ea; }
-    .tags { display: flex; gap: .2rem; flex-wrap: wrap; }
-    .tags span { background: #e8e8e8; padding: .1rem .3rem; border-radius: 3px; font-size: .75rem; }
+    .tags { display: flex; gap: .2rem; flex-wrap: wrap; align-items: center; font-size: .75rem; }
+    .tags span { background: #e8e8e8; padding: .1rem .3rem; border-radius: 3px; }
     .actual-pct { width: 4.5em; text-align: right; border: 1px solid transparent; background: transparent; font: inherit; font-variant-numeric: tabular-nums; padding: 0; margin: 0; color: inherit; }
     .actual-pct:hover, .actual-pct:focus { border-color: #bbb; background: #fff; outline: none; border-radius: 2px; }
     .actual-pct.over-limit { background: #fee2e2; border-color: #dc2626; border-radius: 2px; color: #991b1b; }
