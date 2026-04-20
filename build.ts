@@ -552,9 +552,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td></td>
             <td></td>
             <td></td>
-            <td class="sep right">${fmt(trueActualVotes)}</td>
-            <td class="right">${totalActualApr.toFixed(2)}%</td>
-            <td class="right">${usdFmt(totalActualEarn)}</td>
+            <td class="sep right actual-total-votes">${fmt(trueActualVotes)}</td>
+            <td class="right actual-total-apr">${totalActualApr.toFixed(2)}%</td>
+            <td class="right actual-total-earn">${usdFmt(totalActualEarn)}</td>
             <td class="sep right">${fmt(totalPropBc5Votes)}</td>
             <td class="right">${totalPropBc5Apr.toFixed(2)}%</td>
             <td class="right">${usdFmt(totalPropBc5Earn)}</td>
@@ -577,7 +577,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
               r.bribe_tokens.length > 1 ? "\u2026" : ""
             }</span>`
           : "";
-      return `        <tr>
+      return `        <tr data-reward="${r.fees_bribes_usd}" data-other-votes="${r.pool_votes - r.actual_votes}">
             <td${pt}>${j + 1}</td>
             <td${pt}>${escapeHtml(r.pool_name)}</td>
             <td${pt}>${poolTypeLabel[r.pool_type] ?? ""}</td>
@@ -587,9 +587,9 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td${ptr}>${usdFmt(r.fees_usd)}</td>
             <td${ptr}>${usdFmt(r.bribes_usd)}</td>
             <td${pt}><div class="tags">${bribeTag}</div></td>
-            <td class="sep right">${fmt(r.actual_votes)}</td>
-            <td class="right">${r.actual_vote_pct.toFixed(2)}%</td>
-            <td class="right">${usdFmt(r.actual_earnings_usd)}</td>
+            <td class="sep right actual-votes">${fmt(r.actual_votes)}</td>
+            <td class="right actual-pct-cell">${r.actual_vote_pct.toFixed(2)}%</td>
+            <td class="right actual-earn">${usdFmt(r.actual_earnings_usd)}</td>
             <td class="sep right">${fmt(r.prop_bc5_votes)}</td>
             <td class="right">${r.prop_bc5_vote_pct.toFixed(2)}%</td>
             <td class="right">${usdFmt(r.prop_bc5_earnings_usd)}</td>
@@ -606,7 +606,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
   sections.push(`  <details>
     <summary>Epoch ${first.epoch_number} ${epochTiming}</summary>
     <div class="scroll">
-      <table>
+      <table data-aero-usd="${first.aero_usd}" data-voter-total="${trueActualVotes}">
         <thead>
           <tr>
             <th>#</th>
@@ -733,6 +733,10 @@ const html = `<!DOCTYPE html>
     .new { background: #e6f4ea; }
     .tags { display: flex; gap: .2rem; flex-wrap: wrap; }
     .tags span { background: #e8e8e8; padding: .1rem .3rem; border-radius: 3px; font-size: .75rem; }
+    .actual-pct { width: 4.5em; text-align: right; border: 1px solid transparent; background: transparent; font: inherit; font-variant-numeric: tabular-nums; padding: 0; margin: 0; color: inherit; }
+    .actual-pct:hover, .actual-pct:focus { border-color: #bbb; background: #fff; outline: none; border-radius: 2px; }
+    .actual-pct.over-limit { background: #fee2e2; border-color: #dc2626; border-radius: 2px; color: #991b1b; }
+    tr.total.over-limit .actual-total-apr, tr.total.over-limit .actual-total-earn, tr.total.over-limit .actual-total-votes { color: #991b1b; }
     /* Strategy votes */
     .strategy-votes { margin-bottom: 1rem; }
     .strategy-votes h2 { font-size: 1.1rem; margin-bottom: .4rem; }
@@ -812,6 +816,66 @@ ${strategyVotesHtml}
   </div>
   <p class="intro">The tables below shows the per-pool breakdown for every strategy for each epoch. Pool types are color-coded: <span class="bluechip">blue chip</span>, <span class="stablecoin">stable</span>, <span class="aero">aero</span>, and <span class="new">new</span>.</p>
 ${sections.join("\n")}
+  <script>
+  (function() {
+    var fmtN = function(n) { return n.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0}); };
+    var fmtU = function(n) { return '$' + fmtN(n); };
+    document.querySelectorAll('table[data-aero-usd]').forEach(function(table) {
+      var aeroUsd = parseFloat(table.dataset.aeroUsd);
+      var voterTotal = parseFloat(table.dataset.voterTotal);
+      var rows = table.querySelectorAll('tbody tr:not(.total)');
+      rows.forEach(function(row) {
+        var cell = row.querySelector('.actual-pct-cell');
+        if (!cell) return;
+        var val = cell.textContent.replace('%', '').trim();
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.inputMode = 'decimal';
+        input.className = 'actual-pct';
+        input.value = val;
+        cell.textContent = '';
+        cell.appendChild(input);
+        cell.appendChild(document.createTextNode('%'));
+      });
+      function recalc() {
+        var totalVotes = 0, totalEarn = 0, totalPct = 0;
+        var inputs = [];
+        rows.forEach(function(row) {
+          var input = row.querySelector('.actual-pct');
+          if (!input) return;
+          var pct = parseFloat(input.value) || 0;
+          var reward = parseFloat(row.dataset.reward);
+          var otherVotes = parseFloat(row.dataset.otherVotes);
+          var votes = pct / 100 * voterTotal;
+          var denom = otherVotes + votes;
+          var earn = denom > 0 ? reward * votes / denom : 0;
+          row.querySelector('.actual-votes').textContent = fmtN(votes);
+          row.querySelector('.actual-earn').textContent = fmtU(earn);
+          totalVotes += votes;
+          totalEarn += earn;
+          totalPct += pct;
+          inputs.push({ input: input, pct: pct });
+        });
+        var over = totalPct > 100 + 1e-9;
+        inputs.forEach(function(x) {
+          x.input.classList.toggle('over-limit', over && x.pct > 0);
+        });
+        var totalRow = table.querySelector('.total');
+        if (totalRow) {
+          totalRow.classList.toggle('over-limit', over);
+          var val = totalVotes * aeroUsd;
+          var totalApr = val > 0 ? ((365 / 7) * totalEarn / val) * 100 : 0;
+          totalRow.querySelector('.actual-total-votes').textContent = fmtN(totalVotes);
+          totalRow.querySelector('.actual-total-apr').textContent = totalApr.toFixed(2) + '%';
+          totalRow.querySelector('.actual-total-earn').textContent = fmtU(totalEarn);
+        }
+      }
+      table.addEventListener('input', function(e) {
+        if (e.target.classList.contains('actual-pct')) recalc();
+      });
+    });
+  })();
+  </script>
 </body>
 </html>`;
 
