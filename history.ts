@@ -13,8 +13,13 @@ const GAUGE = "0x57387e4639048B67C30C911a145368bC5B33fE3b" as const;
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631" as const;
 const KVCM = "0x00fbac94fec8d4089d3fe979f39454f48c71a65d" as const; // token0, 18 decimals
 const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" as const; // token1, 6 decimals
-// Our TVL is defined as the gauge liquidity attached to this address only.
-const VOTER_ADDRESS = "0xa79cd47655156b299762dfe92a67980805ce5a31" as const;
+// Our TVL is the combined gauge liquidity of these addresses; anything else
+// counts as external. Changing this list requires a re-backfill (delete
+// pool-history.csv) so the whole series uses one definition.
+const OUR_ADDRESSES = [
+  "0xa79cd47655156b299762dfe92a67980805ce5a31", // veAERO voter
+  "0xf63af2c60547b7e4515a0bb2bcd5e6c09f29ecf5", // treasury LP, staked since epoch 149
+] as const;
 
 // First epoch flip at which the gauge existed: the pool was deployed at block
 // 37190243 and its gauge at 37190335, both on 2025-10-22 (mid-epoch), so the
@@ -316,12 +321,12 @@ async function main() {
           client.multicall({
             contracts: [
               { address: GAUGE, abi: gaugeAbi, functionName: "totalSupply" },
-              {
+              ...OUR_ADDRESSES.map((addr) => ({
                 address: GAUGE,
                 abi: gaugeAbi,
-                functionName: "balanceOf",
-                args: [VOTER_ADDRESS],
-              },
+                functionName: "balanceOf" as const,
+                args: [addr],
+              })),
               { address: POOL, abi: poolAbi, functionName: "totalSupply" },
               { address: POOL, abi: poolAbi, functionName: "getReserves" },
             ],
@@ -343,9 +348,13 @@ async function main() {
       throw err;
     }
 
-    const [gaugeSupplyRaw, ourBalanceRaw, poolSupplyRaw, reserves] = state;
-    const gaugeSupply = Number(gaugeSupplyRaw) / 1e18;
-    const ourGaugeLp = Number(ourBalanceRaw) / 1e18;
+    const gaugeSupply = Number(state[0]) / 1e18;
+    const ourGaugeLp = OUR_ADDRESSES.reduce(
+      (sum, _, j) => sum + Number(state[1 + j]) / 1e18,
+      0
+    );
+    const poolSupplyRaw = state[1 + OUR_ADDRESSES.length];
+    const reserves = state[2 + OUR_ADDRESSES.length];
     const poolSupply = Number(poolSupplyRaw) / 1e18;
     const reserve0 = Number(reserves[0]) / 1e18; // kVCM
     const reserve1 = Number(reserves[1]) / 1e6; // USDC

@@ -32,6 +32,11 @@ const lpSugarAbi = parseAbi([
   "function tokens(uint256 _limit, uint256 _offset, address _account, address[] _addresses) view returns ((address token_address, string symbol, uint8 decimals, uint256 account_balance, bool listed, bool emerging)[])",
 ]);
 
+const gaugeAbi = parseAbi([
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+]);
+
 const PAGE = 200;
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
 
@@ -43,6 +48,24 @@ const HURDLE_TVL_FLOOR = 100_000;
 // handles early epochs where external LP is near zero.
 const INFLOW_REL = 0.02; // of gauge supply
 const INFLOW_ABS = 0.005; // of pool supply
+
+// Reference threat for the friction-adjusted ceiling: the smallest farmer
+// worth deterring and the patience we credit them with. Below this size the
+// pro-rata bite is negligible and round-trip impact can't deter anyway.
+const REF_FARMER_USD = 10_000;
+const REF_PATIENCE_WEEKS = 8;
+// Historical inflows at least this large (Δ external LP, % of gauge supply)
+// count as "sized" — evidence that capital of consequence arrived.
+const SIZED_INFLOW_PCT = 20;
+// Default LP deposit pre-filled in the scenario controls.
+const DEFAULT_DEPOSIT_USD = 100_000;
+
+// Gauge LP held by these addresses counts as ours, not external — keep in
+// sync with OUR_ADDRESSES in history.ts.
+const OUR_LP_ADDRESSES = [
+  "0xa79cd47655156b299762dfe92a67980805ce5a31", // veAERO voter
+  "0xf63af2c60547b7e4515a0bb2bcd5e6c09f29ecf5", // treasury LP, staked since epoch 149
+] as const;
 
 // -- Types --
 
@@ -306,6 +329,9 @@ function inferHistoricalCeiling(hist: HistRow[]) {
   }
   const inflows = points.filter((p) => p.inflow);
   const quiets = points.filter((p) => !p.inflow);
+  // Sized inflows: big enough that friction was overcome by capital that
+  // takes a meaningful emissions share — these calibrate the ceiling cap.
+  const sized = inflows.filter((p) => p.dExtPct >= SIZED_INFLOW_PCT);
   // Decision stump: cutoff minimizing misclassifications of "inflow iff vAPR > v"
   const candidates = [0, ...new Set(points.map((p) => p.vapr))].sort((a, b) => a - b);
   let stump = { vapr: 0, errors: Infinity };
@@ -317,6 +343,8 @@ function inferHistoricalCeiling(hist: HistRow[]) {
     points,
     nInflow: inflows.length,
     minInflowVapr: inflows.length ? Math.min(...inflows.map((p) => p.vapr)) : NaN,
+    nSizedInflow: sized.length,
+    minSizedInflowVapr: sized.length ? Math.min(...sized.map((p) => p.vapr)) : NaN,
     maxQuietVapr: quiets.length ? Math.max(...quiets.map((p) => p.vapr)) : NaN,
     stump,
     // With fewer than 3 observed inflows the order statistics are anecdotes
@@ -442,6 +470,26 @@ async function main() {
   const stakedTvlUsd = staked0 * price0.price + staked1 * price1.price;
   const gaugeRateAeroPerSec = Number(pool.emissions as bigint) / 1e18;
 
+  // Our existing stake: the share of the gauge held by our addresses. It
+  // already earns emissions today, so the income model must credit it in
+  // both columns rather than treating all incumbent TVL as external.
+  const gaugeAddr = pool.gauge as Address;
+  const [gaugeSupplyRaw, ...ourBalancesRaw] = (await Promise.all([
+    read({ address: gaugeAddr, abi: gaugeAbi, functionName: "totalSupply" }),
+    ...OUR_LP_ADDRESSES.map((addr) =>
+      read({
+        address: gaugeAddr,
+        abi: gaugeAbi,
+        functionName: "balanceOf",
+        args: [addr],
+      })
+    ),
+  ])) as bigint[];
+  const gaugeSupplyLp = Number(gaugeSupplyRaw) / 1e18;
+  const ourGaugeLp = ourBalancesRaw.reduce((s, b) => s + Number(b) / 1e18, 0);
+  const ourStakeShare = gaugeSupplyLp > 0 ? ourGaugeLp / gaugeSupplyLp : 0;
+  const ourStakedUsd = stakedTvlUsd * ourStakeShare;
+
   // 3b. Cross-sectional hurdle: emissions-vAPR of every live gauge, weighted
   // by staked TVL. Mercenary capital equalizes returns at the margin, so where
   // the bulk of staked dollars sits is the market hurdle rate it farms at.
@@ -536,8 +584,10 @@ async function main() {
   const historical = inferHistoricalCeiling(poolHist);
   if (historical.points.length > 0) {
     console.log(
-      `  history: ${historical.points.length} epochs, ${historical.nInflow} inflows; ` +
+      `  history: ${historical.points.length} epochs, ${historical.nInflow} inflows ` +
+        `(${historical.nSizedInflow} sized ≥${SIZED_INFLOW_PCT}%); ` +
         `min inflow vAPR ${historical.minInflowVapr.toFixed(1)}%, ` +
+        `min sized ${isFinite(historical.minSizedInflowVapr) ? historical.minSizedInflowVapr.toFixed(1) : "–"}%, ` +
         `stump ${historical.stump.vapr.toFixed(1)}% (${historical.stump.errors} errors), ` +
         `max quiet ${historical.maxQuietVapr.toFixed(1)}%`
     );
@@ -545,10 +595,23 @@ async function main() {
     console.warn("  no pool-history.csv — run `npm run history` for the historical ceiling");
   }
 
-  // Deterrence default: the strictest defensible ceiling both methods support.
+  // Deterrence default: the market hurdle plus a friction premium. A farmer of
+  // size F with patience H weeks only enters if displayed vAPR beats what they
+  // earn elsewhere (p25) PLUS their amortized round-trip impact:
+  //   ceiling = p25 + EPOCHS_PER_YEAR × F / (depth × H)
+  // (round trip ≈ F²/depth, spread over H weeks, as an APR on F). Micro
+  // farmers below F face no friction but take no meaningful emissions share,
+  // so the premium is priced for the smallest farmer worth deterring, at the
+  // depth of the default scenario (pool + default deposit). Capped by the
+  // lowest displayed vAPR that ever drew a sized inflow into our own gauge.
+  const refDepth = poolTvlUsd + DEFAULT_DEPOSIT_USD;
+  const frictionPremiumPct =
+    refDepth > 0
+      ? ((EPOCHS_PER_YEAR * REF_FARMER_USD) / (refDepth * REF_PATIENCE_WEEKS)) * 100
+      : 0;
   const ceilingCandidates = [
-    crossSection.amm.p25,
-    historical.sufficient ? historical.minInflowVapr : NaN,
+    isFinite(crossSection.amm.p25) ? crossSection.amm.p25 + frictionPremiumPct : NaN,
+    historical.nSizedInflow >= 1 ? historical.minSizedInflowVapr : NaN,
   ].filter((v) => isFinite(v));
   const inferredCeiling = ceilingCandidates.length
     ? Math.min(50, Math.max(5, Math.round(Math.min(...ceilingCandidates))))
@@ -661,6 +724,8 @@ async function main() {
       token1: { symbol: t1.symbol, reserve: reserve1, staked: staked1 },
       poolTvlUsd,
       stakedTvlUsd,
+      ourStakedUsd,
+      ourStakeShare,
       feesBribesUsd: {
         latest: poolFeesBribesLatest,
         trailing: poolFeesBribesTrailing,
@@ -675,11 +740,15 @@ async function main() {
     },
     hurdle: {
       inferredCeiling,
+      frictionPremiumPct,
+      refFarmer: { usd: REF_FARMER_USD, patienceWeeks: REF_PATIENCE_WEEKS, depth: refDepth },
       crossSection,
       historical: {
         nEpochs: historical.points.length,
         nInflow: historical.nInflow,
         minInflowVapr: historical.minInflowVapr,
+        nSizedInflow: historical.nSizedInflow,
+        minSizedInflowVapr: historical.minSizedInflowVapr,
         maxQuietVapr: historical.maxQuietVapr,
         stump: historical.stump,
         sufficient: historical.sufficient,
@@ -773,7 +842,9 @@ async function main() {
     voterVotesOnPool
   )} ours)</td></tr>
       <tr><td>Pool TVL</td><td class="right">${usdFmt(poolTvlUsd)}</td>
-          <td>Staked (gauge) TVL</td><td class="right">${usdFmt(stakedTvlUsd)}</td></tr>
+          <td>Staked (gauge) TVL</td><td class="right">${usdFmt(stakedTvlUsd)} (${(
+    ourStakeShare * 100
+  ).toFixed(0)}% ours)</td></tr>
       <tr><td>Pool fees+bribes, latest epoch</td><td class="right">${usdFmt(
         poolFeesBribesLatest,
         2
@@ -802,8 +873,8 @@ async function main() {
     </label>
     <label>Capital to deposit ($)
       <span class="slider-row">
-        <input type="range" id="cap-slider" min="0" max="1000000" step="10000" value="100000">
-        <input type="number" id="cap" min="0" step="1000" value="100000">
+        <input type="range" id="cap-slider" min="0" max="1000000" step="10000" value="${DEFAULT_DEPOSIT_USD}">
+        <input type="number" id="cap" min="0" step="1000" value="${DEFAULT_DEPOSIT_USD}">
       </span>
       <span class="muted" id="cap-split"></span>
     </label>
@@ -814,9 +885,12 @@ async function main() {
   <p class="muted">Target vAPR ceiling default of ${inferredCeiling}% is inferred from mercenary behavior
   (see <a href="#inferred-ceiling">Inferred vAPR ceiling</a>): market hurdle p25 = ${
     isFinite(crossSection.amm.p25) ? crossSection.amm.p25.toFixed(1) + "%" : "n/a"
-  } across ${crossSection.amm.n} comparable AMM gauges${
-    historical.sufficient
-      ? `; external LP historically arrived in our gauge above ${historical.minInflowVapr.toFixed(1)}%`
+  } across ${crossSection.amm.n} comparable AMM gauges, plus a ${frictionPremiumPct.toFixed(
+    0
+  )}pp friction premium (a ${usdFmt(REF_FARMER_USD)} farmer with ${REF_PATIENCE_WEEKS}-week patience must
+  amortize a round trip through ${usdFmt(refDepth)} of depth)${
+    historical.nSizedInflow >= 1
+      ? `, capped by the lowest vAPR that ever drew a sized inflow (≥${SIZED_INFLOW_PCT}% of gauge): ${historical.minSizedInflowVapr.toFixed(1)}%`
       : ""
   }. Edit freely — it only drives the deterrence rows.</p>
 
@@ -834,7 +908,7 @@ async function main() {
   <div class="scroll"><table id="compare-table">
     <thead><tr><th>Income source</th><th class="right">Proportional</th><th class="right">Own-pool scenario</th></tr></thead>
     <tbody>
-      <tr><td>LP emissions captured (our stake share)</td><td class="right">–</td><td class="right" id="cmp-lp"></td></tr>
+      <tr><td>LP emissions captured (our stake share)</td><td class="right" id="cmp-lp-cur"></td><td class="right" id="cmp-lp"></td></tr>
       <tr><td>Voting: our pool's fees+bribes</td><td class="right" id="cmp-own-cur"></td><td class="right" id="cmp-own"></td></tr>
       <tr><td>Voting: other pools' fees+bribes</td><td class="right" id="cmp-other-cur"></td><td class="right" id="cmp-other"></td></tr>
       <tr class="total"><td>Total per week</td><td class="right" id="cmp-total-cur"></td><td class="right" id="cmp-total"></td></tr>
@@ -853,6 +927,12 @@ async function main() {
   <p class="intro">Once emissions land, the gauge's displayed vAPR = annualized emissions ÷ staked TVL.
   A high vAPR attracts mercenary LPs who dilute our share. Adding TVL before the epoch flip keeps the
   displayed vAPR below the target ceiling so the pool never shows up on farming radars.</p>
+  <p class="intro">The displayed number overstates what a farmer of size can realize, though: entering
+  means buying the ${escapeHtml(t0.symbol)} leg through this thin pool and exiting means selling it back,
+  a round trip costing ≈ F² ÷ pool depth in price impact. The economically meaningful deterrence target
+  is therefore the <strong>break-even holding period</strong> — how long a farmer must stay staked before
+  emissions cover their round trip. Historically that friction, more than the displayed vAPR, is what
+  kept capital out.</p>
   <div class="scroll"><table id="deter-table">
     <tbody>
       <tr><td>vAPR after our deposit</td><td class="right big" id="det-vapr"></td></tr>
@@ -860,6 +940,15 @@ async function main() {
       <tr class="total"><td>Additional TVL to add before flip</td><td class="right big" id="det-add"></td></tr>
     </tbody>
   </table></div>
+  <div class="scroll"><table id="merc-table">
+    <thead><tr><th class="right">Farmer size</th><th class="right">Round-trip cost</th>
+      <th class="right">Farm income/week</th><th class="right">Break-even holding</th></tr></thead>
+    <tbody id="merc-body"></tbody>
+  </table></div>
+  <p class="muted">Break-even holding for a farmer entering after our deposit, at the scenario's emissions.
+  Round trip ≈ F²/depth (constant-product impact on the ${escapeHtml(
+    t0.symbol
+  )} leg, in and out); income = the farmer's pro-rata share of weekly emissions after their own dilution.</p>
 
   <h2 id="inferred-ceiling">Inferred vAPR ceiling</h2>
   <p class="intro">Two independent estimates of the vAPR level at which mercenary capital shows up,
@@ -870,7 +959,7 @@ async function main() {
   of already-deployed capital accepts elsewhere.
   <strong>Historical:</strong> our own gauge's record (<code>pool-history.csv</code>, one snapshot
   per epoch flip) shows the displayed vAPR levels at which external LP actually arrived —
-  external means everything not staked by the voter address.</p>
+  external means everything not staked by our addresses (the voter and the treasury LP address).</p>
 
   <div class="scroll"><table>
     <thead><tr><th>Cross-section (today)</th><th class="right">Gauges</th><th class="right">Staked TVL</th>
@@ -903,8 +992,11 @@ async function main() {
   ${
     historical.points.length > 0
       ? `<p class="intro" style="margin-top:1rem">Historical evidence: of ${historical.points.length} past epochs,
-  <strong>${historical.nInflow}</strong> saw external LP inflow. External capital arrived at displayed vAPRs down to
-  <strong>${pf(historical.minInflowVapr)}</strong> (best single split: inflow iff vAPR &gt; ${pf(
+  <strong>${historical.nInflow}</strong> saw external LP inflow, ${
+          historical.nSizedInflow
+        } of them sized (≥${SIZED_INFLOW_PCT}% of gauge supply). Any capital arrived at displayed vAPRs down to
+  <strong>${pf(historical.minInflowVapr)}</strong>, but capital of consequence only above
+  <strong>${pf(historical.minSizedInflowVapr)}</strong> (best single split: inflow iff vAPR &gt; ${pf(
           historical.stump.vapr
         )}, ${historical.stump.errors} of ${historical.points.length} epochs misclassified); the quietest weeks ran as high as ${pf(
           historical.maxQuietVapr
@@ -974,6 +1066,14 @@ async function main() {
     pools by fees+bribes), not the votes as currently cast; other-pool voting income in the scenario spreads
     the non-allocated votes across those same baseline pools in the same proportions.</li>
     <li>Incumbent staked TVL is assumed static; in practice mercenary TVL chases displayed vAPR — that response is exactly what the deterrence calculator is for.</li>
+    <li>Break-even holding assumes the farmer buys the ${escapeHtml(
+      t0.symbol
+    )} leg through this pool and sells it back on exit at similar depth (constant-product impact ≈ F²/depth
+    for the round trip), earns their pro-rata emissions share, and pays no swap fees (ignoring them is
+    conservative — fees would lengthen the break-even, and ≈99% of them flow back to us as the pool's
+    dominant voter). ${escapeHtml(
+      t0.symbol
+    )} sourced elsewhere only moves the price impact to that venue.</li>
     <li>Prices are point-in-time (AERO ${usdFmt(aeroPrice.price, 4)}, ${escapeHtml(
     t0.symbol
   )} ${usdFmt(price0.price, 4)}); no price-impact modeling for acquiring ${escapeHtml(
@@ -988,11 +1088,17 @@ async function main() {
     over live gauges streaming emissions; tokens priced via Alchemy spot with prices.csv fallback, gauges with
     unpriceable tokens skipped. Pool "type" from LpSugar (≤ 0 = basic AMM, &gt; 0 = CL).</li>
     <li>Historical ceiling: pool-history.csv snapshots gauge state 1h after each epoch flip via archive calls;
-    the AERO rate per epoch comes from the gauge's own rewardRateByEpoch record. Our TVL is defined as the
-    gauge balance of the voter address only — LP staked by any other address counts as external, including
-    addresses we might control that are not the voter.</li>
-    <li>The inferred ceiling defaults to the stricter of (cross-sectional p25, lowest vAPR that ever drew
-    external inflow), rounded and clamped to 5–50%; it is a starting point, not a hard rule.</li>
+    the AERO rate per epoch comes from the gauge's own rewardRateByEpoch record. Our TVL is the combined
+    gauge balance of our addresses (the veAERO voter and the treasury LP address ${OUR_LP_ADDRESSES[1].slice(
+      0,
+      6
+    )}…) — LP staked by anyone else counts as external.</li>
+    <li>The inferred ceiling defaults to the stricter of (cross-sectional p25 + friction premium, lowest vAPR
+    that ever drew a sized inflow ≥${SIZED_INFLOW_PCT}% of gauge supply), rounded and clamped to 5–50%. The
+    friction premium = ${fmt(EPOCHS_PER_YEAR, 1)} × F ÷ (depth × H) prices the round trip of a ${usdFmt(
+    REF_FARMER_USD
+  )} farmer with ${REF_PATIENCE_WEEKS}-week patience at the default scenario's depth; smaller farmers face no
+    friction but take no meaningful emissions share. A starting point, not a hard rule.</li>
   </div>
 
   <script>
@@ -1013,7 +1119,8 @@ async function main() {
       var weeklyAero = S.weeklyToGaugesAero * share;
       var weeklyUsd = weeklyAero * S.prices.aero;
       var stakedAfter = S.pool.stakedTvlUsd + capital;
-      var lpIncome = stakedAfter > 0 ? weeklyUsd * capital / stakedAfter : 0;
+      // Our stake = what we already have in the gauge plus the new deposit
+      var lpIncome = stakedAfter > 0 ? weeklyUsd * (S.pool.ourStakedUsd + capital) / stakedAfter : 0;
       var ownVoteIncome = poolVotes > 0 ? S.pool.feesBribesUsd.latest * ourVotes / poolVotes : 0;
       // Non-allocated votes spread across the proportional baseline's pools
       var baselineOther = S.voterPower - S.baselineVotesOnPool;
@@ -1046,8 +1153,11 @@ async function main() {
         ' + ' + fmtN(capital / 2 / S.prices.token0) + ' ' + S.pool.token0.symbol +
         ' (' + fmtU(capital / 2) + ')';
       var target = parseFloat(el('target-vapr').value) || 0;
-      var baseline = S.baselineEarningsUsd.latest;
       var baselineAlloc = S.baselineVotesOnPool / S.voterPower;
+      // Baseline = proportional voting income + what our existing stake would
+      // still earn from the emissions other voters send to the pool.
+      var baseScen = scenario(baselineAlloc, 0);
+      var baseline = S.baselineEarningsUsd.latest + baseScen.lpIncome;
       var s = scenario(alloc, capital);
 
       el('out-pool-votes').textContent = fmtN(s.poolVotes);
@@ -1055,10 +1165,11 @@ async function main() {
       el('out-emissions').textContent = fmtN(s.weeklyAero) + ' AERO';
       el('out-emissions-usd').textContent = fmtU(s.weeklyUsd) + '/wk';
 
+      el('cmp-lp-cur').textContent = fmtU(baseScen.lpIncome);
       el('cmp-lp').textContent = fmtU(s.lpIncome);
-      el('cmp-own-cur').textContent = fmtU(scenario(baselineAlloc, 0).ownVoteIncome, 2);
+      el('cmp-own-cur').textContent = fmtU(baseScen.ownVoteIncome, 2);
       el('cmp-own').textContent = fmtU(s.ownVoteIncome, 2);
-      el('cmp-other-cur').textContent = fmtU(baseline - scenario(baselineAlloc, 0).ownVoteIncome);
+      el('cmp-other-cur').textContent = fmtU(baseline - baseScen.lpIncome - baseScen.ownVoteIncome);
       el('cmp-other').textContent = fmtU(s.otherIncome);
       el('cmp-total-cur').textContent = fmtU(baseline);
       el('cmp-total').textContent = fmtU(s.total);
@@ -1070,6 +1181,30 @@ async function main() {
       el('det-vapr').textContent = s.vApr.toFixed(1) + '%';
       el('det-req').textContent = isFinite(tvlReq) ? fmtU(tvlReq) : '–';
       el('det-add').textContent = isFinite(tvlReq) ? fmtU(extra) : '–';
+
+      // Break-even holding period for reference farmer sizes: round-trip price
+      // impact of the token0 leg (≈ F²/depth) vs their pro-rata emissions.
+      var depth = S.pool.poolTvlUsd + capital;
+      var mercBody = el('merc-body');
+      mercBody.textContent = '';
+      [10000, 25000, 100000].forEach(function(F) {
+        var cost = depth > 0 ? F * F / depth : Infinity;
+        var income = s.stakedAfter + F > 0 ? s.weeklyUsd * F / (s.stakedAfter + F) : 0;
+        var weeks = income > 0 && isFinite(cost) ? cost / income : Infinity;
+        var tr = document.createElement('tr');
+        [
+          fmtU(F),
+          isFinite(cost) ? fmtU(cost) + ' (' + (cost / F * 100).toFixed(0) + '%)' : '–',
+          fmtU(income),
+          !isFinite(weeks) ? 'never' : weeks >= 104 ? '2+ years' : weeks.toFixed(1) + ' wk'
+        ].forEach(function(text) {
+          var td = document.createElement('td');
+          td.className = 'right';
+          td.textContent = text;
+          tr.appendChild(td);
+        });
+        mercBody.appendChild(tr);
+      });
 
       var body = el('ladder-body');
       body.textContent = '';
