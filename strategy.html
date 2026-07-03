@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aerodrome Own-Pool Strategy</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; padding: 1rem; color: #1a1a1a; background: #fafafa; }
+    h1 { font-size: 1.4rem; margin-bottom: 1rem; }
+    h2 { font-size: 1.1rem; margin: 1.2rem 0 .4rem; }
+    a { color: #2563eb; }
+    .voter { font-size: .85rem; margin-bottom: .5rem; color: #555; }
+    .intro { font-size: .85rem; line-height: 1.5; color: #444; margin-bottom: 1rem; max-width: 80ch; }
+    .intro p { margin-bottom: .4rem; }
+    table { border-collapse: collapse; font-size: .85rem; margin-top: .5rem; font-variant-numeric: tabular-nums; }
+    th, td { padding: .4rem .6rem; text-align: left; border-bottom: 1px solid #e0e0e0; white-space: nowrap; }
+    th { background: #f0f0f0; font-weight: 600; }
+    .right { text-align: right; }
+    .total { font-weight: 600; background: #f0f0f0; }
+    .scroll { overflow-x: auto; }
+    .muted { color: #777; font-size: .8rem; }
+    .delta-pos { color: #15803d; font-weight: 600; }
+    .delta-neg { color: #b91c1c; font-weight: 600; }
+    .controls { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: .8rem 0 1rem; padding: .8rem; background: #f0f0f0; border-radius: 6px; font-size: .85rem; }
+    .controls label { display: flex; flex-direction: column; gap: .3rem; font-weight: 600; }
+    .controls input[type="number"] { width: 8em; font: inherit; padding: .25rem .4rem; border: 1px solid #bbb; border-radius: 4px; text-align: right; font-variant-numeric: tabular-nums; }
+    .controls input[type="range"] { width: 14em; }
+    .controls .slider-row { display: flex; align-items: center; gap: .6rem; font-weight: 400; }
+    .big { font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .footnotes { font-size: .8rem; color: #555; line-height: 1.5; max-width: 90ch; margin-top: 1.5rem; }
+    .footnotes li { margin: .2rem 0 .2rem 1.4rem; }
+  </style>
+</head>
+<body>
+  <h1>Aerodrome Own-Pool Strategy <span class="muted">→ <a href="index.html">voting dashboard</a></span></h1>
+  <p class="voter">Voter: <code>0xa79cd47655156b299762dfe92a67980805ce5a31</code> · Pool: <code>0x5C0D76fab1822bDeb47308eD6028231761ED723E</code> (vAMM-kVCM/USDC) · Snapshot: 2026-07-03 12:07 UTC · Epoch 149 (2026-07-02)</p>
+  <div class="intro">
+    <p>This page models farming our own votes: instead of voting for pools with the best fees and bribes,
+    point some or all of our 5,347,926 votes at our own vAMM-kVCM/USDC pool so it
+    receives a share of the weekly AERO emissions, then capture those emissions ourselves by staking LP in the gauge.
+    Votes cast now take effect at the next epoch flip (Thursday 00:00 UTC).</p>
+  </div>
+
+  <h2>Snapshot</h2>
+  <div class="scroll"><table>
+    <tbody>
+      <tr><td>AERO price</td><td class="right">$0.5104</td>
+          <td>kVCM price</td><td class="right">$0.0325</td></tr>
+      <tr><td>Weekly emissions to gauges</td><td class="right">4,031,192 AERO ($2,057,714) of 8,969,150 minted</td>
+          <td>Total votes this epoch</td><td class="right">997,487,750</td></tr>
+      <tr><td>Our vote power</td><td class="right">5,347,926 (0.536% of total)</td>
+          <td>Pool votes now</td><td class="right">537,701 (534,793 ours)</td></tr>
+      <tr><td>Pool TVL</td><td class="right">$79,004</td>
+          <td>Staked (gauge) TVL</td><td class="right">$67,288</td></tr>
+      <tr><td>Pool fees+bribes, latest epoch</td><td class="right">$10.63</td>
+          <td>Gauge streaming this epoch</td><td class="right">2,192 AERO/wk</td></tr>
+      <tr><td>Current voting earnings, epoch 149</td><td class="right">$4,615/wk</td>
+          <td>Trailing 4-epoch average</td><td class="right">$5,538/wk</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted">Maximum emissions our votes could send to the pool (100% allocation):
+  <strong>21,625 AERO/week ≈ $11,038/week</strong> at the current AERO price.</p>
+
+  <h2>Scenario</h2>
+  <div class="controls">
+    <label>Vote allocation to our pool
+      <span class="slider-row">
+        <input type="range" id="alloc-slider" min="0" max="100" step="0.5" value="10">
+        <input type="number" id="alloc" min="0" max="100" step="0.5" value="10">%
+      </span>
+    </label>
+    <label>USDC to deposit ($)
+      <input type="number" id="cap-usdc" min="0" step="1000" value="50000">
+    </label>
+    <label>kVCM to deposit ($)
+      <input type="number" id="cap-kvcm" min="0" step="1000" value="50000">
+    </label>
+    <label>Target vAPR ceiling (%)
+      <input type="number" id="target-vapr" min="0.1" step="1" value="7">
+    </label>
+  </div>
+  <p class="muted">Target vAPR ceiling default of 7% is inferred from mercenary behavior
+  (see <a href="#inferred-ceiling">Inferred vAPR ceiling</a>): market hurdle p25 = 6.5% across 41 comparable AMM gauges; external LP historically arrived in our gauge above 14.8%. Edit freely — it only drives the deterrence rows.</p>
+
+  <div class="scroll"><table id="emissions-table">
+    <thead><tr><th></th><th class="right">Value</th></tr></thead>
+    <tbody>
+      <tr><td>Votes on pool after reallocation</td><td class="right" id="out-pool-votes"></td></tr>
+      <tr><td>Share of total votes</td><td class="right" id="out-share"></td></tr>
+      <tr><td>Weekly emissions to pool</td><td class="right" id="out-emissions"></td></tr>
+      <tr class="total"><td>Weekly emissions value</td><td class="right big" id="out-emissions-usd"></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Weekly income: current strategy vs own-pool farming</h2>
+  <div class="scroll"><table id="compare-table">
+    <thead><tr><th>Income source</th><th class="right">Current</th><th class="right">Own-pool scenario</th></tr></thead>
+    <tbody>
+      <tr><td>LP emissions captured (our stake share)</td><td class="right">–</td><td class="right" id="cmp-lp"></td></tr>
+      <tr><td>Voting: our pool's fees+bribes</td><td class="right" id="cmp-own-cur"></td><td class="right" id="cmp-own"></td></tr>
+      <tr><td>Voting: other pools' fees+bribes</td><td class="right" id="cmp-other-cur"></td><td class="right" id="cmp-other"></td></tr>
+      <tr class="total"><td>Total per week</td><td class="right" id="cmp-total-cur"></td><td class="right" id="cmp-total"></td></tr>
+      <tr><td>Net delta vs current</td><td class="right">–</td><td class="right" id="cmp-delta"></td></tr>
+      <tr><td>Annualized delta</td><td class="right">–</td><td class="right" id="cmp-delta-year"></td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted">Current column is epoch 149 actuals (trailing 4-epoch average: $5,538/wk). Scenario assumes incumbent stakers ($67,288) neither add nor remove liquidity.</p>
+
+  <h2>Mercenary deterrence: TVL to add before the flip</h2>
+  <p class="intro">Once emissions land, the gauge's displayed vAPR = annualized emissions ÷ staked TVL.
+  A high vAPR attracts mercenary LPs who dilute our share. Adding TVL before the epoch flip keeps the
+  displayed vAPR below the target ceiling so the pool never shows up on farming radars.</p>
+  <div class="scroll"><table id="deter-table">
+    <tbody>
+      <tr><td>vAPR after our deposit</td><td class="right big" id="det-vapr"></td></tr>
+      <tr><td>Staked TVL required for target vAPR</td><td class="right" id="det-req"></td></tr>
+      <tr class="total"><td>Additional TVL to add before flip</td><td class="right big" id="det-add"></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="inferred-ceiling">Inferred vAPR ceiling</h2>
+  <p class="intro">Two independent estimates of the vAPR level at which mercenary capital shows up,
+  used to default the target ceiling above.
+  <strong>Cross-sectional:</strong> mercenary capital equalizes returns at the margin, so the
+  staked-TVL-weighted distribution of emissions-vAPR across all live gauges reveals the market
+  hurdle rate it farms at — staying below the p25 keeps our pool less attractive than what ~75%
+  of already-deployed capital accepts elsewhere.
+  <strong>Historical:</strong> our own gauge's record (<code>pool-history.csv</code>, one snapshot
+  per epoch flip) shows the displayed vAPR levels at which external LP actually arrived —
+  external means everything not staked by the voter address.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>Cross-section (today)</th><th class="right">Gauges</th><th class="right">Staked TVL</th>
+      <th class="right">p25</th><th class="right">p50</th><th class="right">p75</th></tr></thead>
+    <tbody>
+      <tr><td>Comparable AMM (volatile + stable)</td><td class="right">41</td><td class="right">$85,896,985</td><td class="right">6.5%</td><td class="right">13.9%</td><td class="right">36.1%</td></tr>
+      <tr><td>Concentrated liquidity</td><td class="right">28</td><td class="right">$61,722,096</td><td class="right">16.3%</td><td class="right">20.6%</td><td class="right">20.6%</td></tr>
+      <tr><td>All pool types</td><td class="right">69</td><td class="right">$147,619,081</td><td class="right">13.9%</td><td class="right">20.6%</td><td class="right">36.1%</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted">TVL-weighted percentiles over live gauges with ≥ $100,000 staked, our pool excluded; 337 of 545 emitting gauges priced (207 skipped for missing token prices).
+  CL gauges shown for context only — their displayed vAPR is not comparable to a vAMM's.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>Displayed vAPR</th><th class="right">AMM gauges</th><th class="right">Share of staked TVL</th></tr></thead>
+    <tbody>
+      <tr><td>0–10%</td><td class="right">21</td><td class="right">32.8%</td></tr>
+      <tr><td>10–20%</td><td class="right">6</td><td class="right">19.1%</td></tr>
+      <tr><td>20–40%</td><td class="right">9</td><td class="right">43.6%</td></tr>
+      <tr><td>40–80%</td><td class="right">1</td><td class="right">0.3%</td></tr>
+      <tr><td>80%+</td><td class="right">4</td><td class="right">4.2%</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="intro" style="margin-top:1rem">Historical evidence: of 36 past epochs,
+  <strong>15</strong> saw external LP inflow. External capital arrived at displayed vAPRs down to
+  <strong>14.8%</strong> (best single split: inflow iff vAPR &gt; 62.4%, 8 of 36 epochs misclassified); the quietest weeks ran as high as 90.8% without attracting anyone.</p>
+  <div class="scroll"><table>
+    <thead><tr><th class="right">Epoch</th><th>Flip</th><th class="right">Staked TVL</th>
+      <th class="right">Displayed vAPR</th><th class="right">Δ external LP</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td class="right">113</td><td>2025-10-23</td><td class="right">$26,627</td><td class="right">1652.8%</td><td class="right">+786.5%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">114</td><td>2025-10-30</td><td class="right">$366,949</td><td class="right">154.0%</td><td class="right">+10.7%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">115</td><td>2025-11-06</td><td class="right">$393,299</td><td class="right">167.7%</td><td class="right">+24.2%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">116</td><td>2025-11-13</td><td class="right">$589,440</td><td class="right">133.0%</td><td class="right">+86.6%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">117</td><td>2025-11-20</td><td class="right">$843,390</td><td class="right">86.8%</td><td class="right">-41.1%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">118</td><td>2025-11-27</td><td class="right">$717,044</td><td class="right">90.8%</td><td class="right">-8.1%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">119</td><td>2025-12-04</td><td class="right">$657,912</td><td class="right">93.1%</td><td class="right">+13.8%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">120</td><td>2025-12-11</td><td class="right">$815,458</td><td class="right">79.9%</td><td class="right">+2.6%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">121</td><td>2025-12-18</td><td class="right">$809,705</td><td class="right">69.3%</td><td class="right">+14.4%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">122</td><td>2025-12-25</td><td class="right">$862,322</td><td class="right">62.1%</td><td class="right">-6.6%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">123</td><td>2026-01-01</td><td class="right">$747,774</td><td class="right">60.0%</td><td class="right">+9.6%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">124</td><td>2026-01-08</td><td class="right">$834,354</td><td class="right">74.4%</td><td class="right">+1.6%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">125</td><td>2026-01-15</td><td class="right">$825,392</td><td class="right">62.4%</td><td class="right">-0.5%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">126</td><td>2026-01-22</td><td class="right">$818,754</td><td class="right">52.7%</td><td class="right">-26.8%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">127</td><td>2026-01-29</td><td class="right">$482,985</td><td class="right">54.0%</td><td class="right">-20.6%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">128</td><td>2026-02-05</td><td class="right">$382,024</td><td class="right">36.8%</td><td class="right">-37.3%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">129</td><td>2026-02-12</td><td class="right">$235,544</td><td class="right">34.2%</td><td class="right">-14.5%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">130</td><td>2026-02-19</td><td class="right">$200,879</td><td class="right">0.9%</td><td class="right">-29.6%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">131</td><td>2026-02-26</td><td class="right">$142,923</td><td class="right">0.7%</td><td class="right">-81.1%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">132</td><td>2026-03-05</td><td class="right">$26,123</td><td class="right">5.3%</td><td class="right">-18.7%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">133</td><td>2026-03-12</td><td class="right">$14,074</td><td class="right">14.8%</td><td class="right">+15.1%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">134</td><td>2026-03-19</td><td class="right">$19,326</td><td class="right">36.3%</td><td class="right">+16.9%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">135</td><td>2026-03-26</td><td class="right">$26,775</td><td class="right">7.5%</td><td class="right">-15.2%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">136</td><td>2026-04-02</td><td class="right">$22,588</td><td class="right">10.1%</td><td class="right">-48.8%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">137</td><td>2026-04-09</td><td class="right">$11,500</td><td class="right">17.2%</td><td class="right">-0.9%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">138</td><td>2026-04-16</td><td class="right">$11,168</td><td class="right">8.8%</td><td class="right">-12.7%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">139</td><td>2026-04-23</td><td class="right">$8,670</td><td class="right">6.4%</td><td class="right">-7.0%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">140</td><td>2026-04-30</td><td class="right">$6,980</td><td class="right">116.6%</td><td class="right">+94.8%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">141</td><td>2026-05-07</td><td class="right">$12,790</td><td class="right">80.6%</td><td class="right">+3.5%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">142</td><td>2026-05-14</td><td class="right">$12,903</td><td class="right">83.1%</td><td class="right">-8.0%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">143</td><td>2026-05-21</td><td class="right">$10,625</td><td class="right">71.9%</td><td class="right">+9.1%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">144</td><td>2026-05-28</td><td class="right">$12,327</td><td class="right">57.6%</td><td class="right">+1.5%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">145</td><td>2026-06-04</td><td class="right">$11,823</td><td class="right">57.1%</td><td class="right">+0.5%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">146</td><td>2026-06-11</td><td class="right">$10,773</td><td class="right">52.7%</td><td class="right">+2.5%</td><td><span class="delta-neg">inflow</span></td></tr>
+      <tr><td class="right">147</td><td>2026-06-18</td><td class="right">$11,731</td><td class="right">61.5%</td><td class="right">+0.0%</td><td><span class="muted">quiet</span></td></tr>
+      <tr><td class="right">148</td><td>2026-06-25</td><td class="right">$12,088</td><td class="right">68.2%</td><td class="right">+385.9%</td><td><span class="delta-neg">inflow</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted">Δ external LP is the change in non-voter gauge liquidity over the epoch, in LP units
+  (price-independent), relative to gauge supply at the flip. Inflow = growth beyond
+  max(2% of gauge supply, 0.5% of pool supply).</p>
+
+  <h2>Allocation ladder</h2>
+  <div class="scroll"><table id="ladder-table">
+    <thead><tr>
+      <th class="right">Allocation</th><th class="right">AERO/week</th><th class="right">$/week to pool</th>
+      <th class="right">LP income/week</th><th class="right">Total/week</th><th class="right">Δ vs current</th>
+      <th class="right">vAPR after deposit</th><th class="right">TVL for target</th><th class="right">Extra TVL needed</th>
+    </tr></thead>
+    <tbody id="ladder-body"></tbody>
+  </table></div>
+
+  <div class="footnotes">
+    <strong>Assumptions</strong>
+    <li>Emissions to a gauge = total gauge emissions × pool votes / total votes. Only 45% of Minter weekly (8,969,150 AERO) reaches gauges — the veAERO rebase and team allocation are carved out — so the total is measured by summing every live gauge's streaming rate (4,031,192 AERO/wk).</li>
+    <li>One-epoch lag: votes cast now direct emissions that start streaming at the next flip. The gauge currently streams 2,192 AERO/wk (set by last epoch's votes); current votes imply 2,173 AERO/wk at the next flip.</li>
+    <li>Total votes are held constant: reallocating our votes moves them between pools without changing the total.</li>
+    <li>Own-pool fees+bribes use the latest epoch's $10.63 (trailing 4-epoch average $7.31); voting more for our own pool doesn't create new fees, it only changes our share of them.</li>
+    <li>Other-pool voting income assumes the freed/remaining votes stay spread across our current pools in the same proportions.</li>
+    <li>Incumbent staked TVL is assumed static; in practice mercenary TVL chases displayed vAPR — that response is exactly what the deterrence calculator is for.</li>
+    <li>Prices are point-in-time (AERO $0.5104, kVCM $0.0325); no price-impact modeling for acquiring kVCM or for AERO sell pressure from farming.</li>
+    <li>LP deposits into a vAMM pool must be balanced 50/50 by value at deposit time; the two capital inputs are summed into one position.</li>
+    <li>Cross-sectional hurdle: emissions-vAPR = gauge streaming rate × 52.14 weeks × AERO price ÷ staked TVL,
+    over live gauges streaming emissions; tokens priced via Alchemy spot with prices.csv fallback, gauges with
+    unpriceable tokens skipped. Pool "type" from LpSugar (≤ 0 = basic AMM, &gt; 0 = CL).</li>
+    <li>Historical ceiling: pool-history.csv snapshots gauge state 1h after each epoch flip via archive calls;
+    the AERO rate per epoch comes from the gauge's own rewardRateByEpoch record. Our TVL is defined as the
+    gauge balance of the voter address only — LP staked by any other address counts as external, including
+    addresses we might control that are not the voter.</li>
+    <li>The inferred ceiling defaults to the stricter of (cross-sectional p25, lowest vAPR that ever drew
+    external inflow), rounded and clamped to 5–50%; it is a starting point, not a hard rule.</li>
+  </div>
+
+  <script>
+  const S = {"generatedAt":"2026-07-03T12:07:40.708Z","epochNumber":149,"epochDate":"2026-07-02","voterAddress":"0xa79cd47655156b299762dfe92a67980805ce5a31","minterWeeklyAero":8969149.540107574,"weeklyToGaugesAero":4031192.270595118,"totalVotes":997487750.1882253,"poolVotes":537701.0675555369,"voterPower":5347926.344628165,"voterVotesOnPool":534792.63,"currentEarningsUsd":{"latest":4614.53,"trailing":5538.014999999999,"trailingEpochs":4},"otherPools":[{"name":"vAMM-USDC/AERO","votes":900590.8,"otherVotes":99322965.64479482,"reward":65140.88},{"name":"CL50-WETH/USDC","votes":666351.62,"otherVotes":78671506.77962603,"reward":101369.11},{"name":"CL100-WETH/cbBTC","votes":467943.56,"otherVotes":62170645.46359151,"reward":73967.88},{"name":"CL200-WETH/AERO","votes":529979.5,"otherVotes":57171558.55759243,"reward":33551.88},{"name":"CL10-WETH/cbBTC","votes":362054.61,"otherVotes":53252831.61943658,"reward":58201.63},{"name":"CL50-msUSD/USDC","votes":450830.19,"otherVotes":45260234.843570374,"reward":23446.72},{"name":"CL50-USDC/cbBTC","votes":303227.42,"otherVotes":34625992.18136205,"reward":52660.54},{"name":"CL50-WETH/msETH","votes":330501.85,"otherVotes":33523261.652944088,"reward":24295.46},{"name":"CL100-WETH/USDC","votes":319271.2,"otherVotes":32564900.465037286,"reward":46513.45},{"name":"CL2000-USDC/AERO","votes":262048.39,"otherVotes":28760373.843939893,"reward":25824.36},{"name":"CL100-WETH/VVV","votes":220334.57,"otherVotes":24913745.890168242,"reward":34573.54}],"pool":{"symbol":"vAMM-kVCM/USDC","address":"0x5C0D76fab1822bDeb47308eD6028231761ED723E","gauge":"0x57387e4639048B67C30C911a145368bC5B33fE3b","token0":{"symbol":"kVCM","reserve":1214471.0169015059,"staked":1034364.3905027416},"token1":{"symbol":"USDC","reserve":39576.432881,"staked":33707.22916},"poolTvlUsd":79004.38776486221,"stakedTvlUsd":67287.9996803749,"feesBribesUsd":{"latest":10.63,"trailing":7.307500000000001},"gaugeWeeklyAero":2192.384252853505},"prices":{"aero":0.5104479234,"token0":0.0324706738,"token1":0.9998297637,"dates":{"aero":"2026-07-03","token0":"2026-07-03","token1":"2026-07-03"}},"hurdle":{"inferredCeiling":7,"crossSection":{"nGauges":545,"nPriced":337,"unpricedGauges":207,"tvlFloor":100000,"amm":{"n":41,"tvl":85896985.09137149,"p25":6.516593806901196,"p50":13.88777095696408,"p75":36.10289626875896},"cl":{"n":28,"tvl":61722095.88704248,"p25":16.328589050784057,"p50":20.615284616826266,"p75":20.615284616826266},"all":{"n":69,"tvl":147619080.97841397,"p25":13.88777095696408,"p50":20.615284616826266,"p75":36.10289626875896},"buckets":[{"label":"0–10%","count":21,"tvlSharePct":32.82431446118144},{"label":"10–20%","count":6,"tvlSharePct":19.089737864773088},{"label":"20–40%","count":9,"tvlSharePct":43.56942329813184},{"label":"40–80%","count":1,"tvlSharePct":0.2679819370768366},{"label":"80%+","count":4,"tvlSharePct":4.248542438836799}]},"historical":{"nEpochs":36,"nInflow":15,"minInflowVapr":14.76,"maxQuietVapr":90.77,"stump":{"vapr":62.41,"errors":8},"sufficient":true,"points":[{"epoch":113,"date":"2025-10-23","stakedTvlUsd":26626.69,"vapr":1652.81,"dExtPct":786.5455128368832,"inflow":true},{"epoch":114,"date":"2025-10-30","stakedTvlUsd":366949.37,"vapr":153.96,"dExtPct":10.662680544207754,"inflow":true},{"epoch":115,"date":"2025-11-06","stakedTvlUsd":393299.43,"vapr":167.71,"dExtPct":24.23474916677471,"inflow":true},{"epoch":116,"date":"2025-11-13","stakedTvlUsd":589440.18,"vapr":132.97,"dExtPct":86.60206593484445,"inflow":true},{"epoch":117,"date":"2025-11-20","stakedTvlUsd":843389.6,"vapr":86.81,"dExtPct":-41.07527834420992,"inflow":false},{"epoch":118,"date":"2025-11-27","stakedTvlUsd":717044.29,"vapr":90.77,"dExtPct":-8.064477686739968,"inflow":false},{"epoch":119,"date":"2025-12-04","stakedTvlUsd":657912.46,"vapr":93.14,"dExtPct":13.845890128769003,"inflow":true},{"epoch":120,"date":"2025-12-11","stakedTvlUsd":815457.59,"vapr":79.93,"dExtPct":2.6348176081181496,"inflow":true},{"epoch":121,"date":"2025-12-18","stakedTvlUsd":809704.62,"vapr":69.3,"dExtPct":14.41471451521981,"inflow":true},{"epoch":122,"date":"2025-12-25","stakedTvlUsd":862321.8,"vapr":62.14,"dExtPct":-6.643245040319573,"inflow":false},{"epoch":123,"date":"2026-01-01","stakedTvlUsd":747773.74,"vapr":60.04,"dExtPct":9.602173327507602,"inflow":true},{"epoch":124,"date":"2026-01-08","stakedTvlUsd":834354.49,"vapr":74.4,"dExtPct":1.5531760019577578,"inflow":false},{"epoch":125,"date":"2026-01-15","stakedTvlUsd":825392.29,"vapr":62.41,"dExtPct":-0.5488843963113589,"inflow":false},{"epoch":126,"date":"2026-01-22","stakedTvlUsd":818753.92,"vapr":52.74,"dExtPct":-26.768556749232147,"inflow":false},{"epoch":127,"date":"2026-01-29","stakedTvlUsd":482984.7,"vapr":54.01,"dExtPct":-20.57664577496605,"inflow":false},{"epoch":128,"date":"2026-02-05","stakedTvlUsd":382024.47,"vapr":36.76,"dExtPct":-37.307320644574155,"inflow":false},{"epoch":129,"date":"2026-02-12","stakedTvlUsd":235544.21,"vapr":34.18,"dExtPct":-14.535614673025224,"inflow":false},{"epoch":130,"date":"2026-02-19","stakedTvlUsd":200878.83,"vapr":0.87,"dExtPct":-29.632246188906514,"inflow":false},{"epoch":131,"date":"2026-02-26","stakedTvlUsd":142922.63,"vapr":0.74,"dExtPct":-81.12732570891968,"inflow":false},{"epoch":132,"date":"2026-03-05","stakedTvlUsd":26122.74,"vapr":5.29,"dExtPct":-18.739113388855472,"inflow":false},{"epoch":133,"date":"2026-03-12","stakedTvlUsd":14073.77,"vapr":14.76,"dExtPct":15.072788631756378,"inflow":true},{"epoch":134,"date":"2026-03-19","stakedTvlUsd":19325.87,"vapr":36.32,"dExtPct":16.865475228958857,"inflow":true},{"epoch":135,"date":"2026-03-26","stakedTvlUsd":26775.13,"vapr":7.45,"dExtPct":-15.227626860347756,"inflow":false},{"epoch":136,"date":"2026-04-02","stakedTvlUsd":22588.21,"vapr":10.09,"dExtPct":-48.813496174451544,"inflow":false},{"epoch":137,"date":"2026-04-09","stakedTvlUsd":11500.13,"vapr":17.18,"dExtPct":-0.8952834194261392,"inflow":false},{"epoch":138,"date":"2026-04-16","stakedTvlUsd":11167.62,"vapr":8.77,"dExtPct":-12.68824866853727,"inflow":false},{"epoch":139,"date":"2026-04-23","stakedTvlUsd":8670.39,"vapr":6.36,"dExtPct":-7.0318489557932,"inflow":false},{"epoch":140,"date":"2026-04-30","stakedTvlUsd":6979.58,"vapr":116.61,"dExtPct":94.77614029247626,"inflow":true},{"epoch":141,"date":"2026-05-07","stakedTvlUsd":12789.54,"vapr":80.6,"dExtPct":3.5386687072522225,"inflow":true},{"epoch":142,"date":"2026-05-14","stakedTvlUsd":12903.22,"vapr":83.1,"dExtPct":-7.999311902340804,"inflow":false},{"epoch":143,"date":"2026-05-21","stakedTvlUsd":10625.17,"vapr":71.9,"dExtPct":9.142843508778586,"inflow":true},{"epoch":144,"date":"2026-05-28","stakedTvlUsd":12326.54,"vapr":57.64,"dExtPct":1.4600475148033276,"inflow":false},{"epoch":145,"date":"2026-06-04","stakedTvlUsd":11823.04,"vapr":57.1,"dExtPct":0.5413639386655904,"inflow":false},{"epoch":146,"date":"2026-06-11","stakedTvlUsd":10772.68,"vapr":52.67,"dExtPct":2.5116998040932352,"inflow":true},{"epoch":147,"date":"2026-06-18","stakedTvlUsd":11731.19,"vapr":61.46,"dExtPct":0.0030495077065994156,"inflow":false},{"epoch":148,"date":"2026-06-25","stakedTvlUsd":12088.08,"vapr":68.2,"dExtPct":385.9229125091177,"inflow":true}]}}};
+  (function() {
+    var fmtN = function(n, d) { return n.toLocaleString('en-US', {minimumFractionDigits: d || 0, maximumFractionDigits: d || 0}); };
+    var fmtU = function(n, d) { return '$' + fmtN(n, d); };
+    var EPOCHS_PER_YEAR = 365 / 7;
+    var el = function(id) { return document.getElementById(id); };
+
+    // Scenario math shared by the main outputs and the ladder rows.
+    // alloc: fraction of our vote power on the pool; capital: our LP deposit ($).
+    function scenario(alloc, capital) {
+      var otherVotesOnPool = S.poolVotes - S.voterVotesOnPool;
+      var ourVotes = alloc * S.voterPower;
+      var poolVotes = otherVotesOnPool + ourVotes;
+      var share = poolVotes / S.totalVotes;
+      var weeklyAero = S.weeklyToGaugesAero * share;
+      var weeklyUsd = weeklyAero * S.prices.aero;
+      var stakedAfter = S.pool.stakedTvlUsd + capital;
+      var lpIncome = stakedAfter > 0 ? weeklyUsd * capital / stakedAfter : 0;
+      var ownVoteIncome = poolVotes > 0 ? S.pool.feesBribesUsd.latest * ourVotes / poolVotes : 0;
+      // Remaining votes spread across our other pools proportionally to today's allocation
+      var currentOther = S.voterPower - S.voterVotesOnPool;
+      var scale = currentOther > 0 ? (1 - alloc) * S.voterPower / currentOther : 0;
+      var otherIncome = 0;
+      S.otherPools.forEach(function(p) {
+        var v = p.votes * scale;
+        var denom = p.otherVotes + v;
+        if (denom > 0) otherIncome += p.reward * v / denom;
+      });
+      var vApr = stakedAfter > 0 ? weeklyUsd * EPOCHS_PER_YEAR / stakedAfter * 100 : 0;
+      return {
+        poolVotes: poolVotes, share: share, weeklyAero: weeklyAero, weeklyUsd: weeklyUsd,
+        lpIncome: lpIncome, ownVoteIncome: ownVoteIncome, otherIncome: otherIncome,
+        total: lpIncome + ownVoteIncome + otherIncome, vApr: vApr, stakedAfter: stakedAfter
+      };
+    }
+
+    function deltaCell(cell, delta) {
+      cell.textContent = (delta >= 0 ? '+' : '−') + fmtU(Math.abs(delta));
+      cell.classList.toggle('delta-pos', delta >= 0);
+      cell.classList.toggle('delta-neg', delta < 0);
+    }
+
+    function recalc() {
+      var alloc = Math.min(100, Math.max(0, parseFloat(el('alloc').value) || 0)) / 100;
+      var capital = (parseFloat(el('cap-usdc').value) || 0) + (parseFloat(el('cap-kvcm').value) || 0);
+      var target = parseFloat(el('target-vapr').value) || 0;
+      var current = S.currentEarningsUsd.latest;
+      var s = scenario(alloc, capital);
+
+      el('out-pool-votes').textContent = fmtN(s.poolVotes);
+      el('out-share').textContent = (s.share * 100).toFixed(4) + '%';
+      el('out-emissions').textContent = fmtN(s.weeklyAero) + ' AERO';
+      el('out-emissions-usd').textContent = fmtU(s.weeklyUsd) + '/wk';
+
+      el('cmp-lp').textContent = fmtU(s.lpIncome);
+      el('cmp-own-cur').textContent = fmtU(scenario(S.voterVotesOnPool / S.voterPower, 0).ownVoteIncome, 2);
+      el('cmp-own').textContent = fmtU(s.ownVoteIncome, 2);
+      el('cmp-other-cur').textContent = fmtU(current - scenario(S.voterVotesOnPool / S.voterPower, 0).ownVoteIncome);
+      el('cmp-other').textContent = fmtU(s.otherIncome);
+      el('cmp-total-cur').textContent = fmtU(current);
+      el('cmp-total').textContent = fmtU(s.total);
+      deltaCell(el('cmp-delta'), s.total - current);
+      deltaCell(el('cmp-delta-year'), (s.total - current) * EPOCHS_PER_YEAR);
+
+      var tvlReq = target > 0 ? s.weeklyUsd * EPOCHS_PER_YEAR / (target / 100) : Infinity;
+      var extra = Math.max(0, tvlReq - s.stakedAfter);
+      el('det-vapr').textContent = s.vApr.toFixed(1) + '%';
+      el('det-req').textContent = isFinite(tvlReq) ? fmtU(tvlReq) : '–';
+      el('det-add').textContent = isFinite(tvlReq) ? fmtU(extra) : '–';
+
+      var body = el('ladder-body');
+      body.textContent = '';
+      [5, 10, 25, 50, 75, 100].forEach(function(pct) {
+        var r = scenario(pct / 100, capital);
+        var req = target > 0 ? r.weeklyUsd * EPOCHS_PER_YEAR / (target / 100) : Infinity;
+        var add = Math.max(0, req - r.stakedAfter);
+        var tr = document.createElement('tr');
+        var cells = [
+          pct + '%', fmtN(r.weeklyAero), fmtU(r.weeklyUsd), fmtU(r.lpIncome), fmtU(r.total),
+          null, r.vApr.toFixed(1) + '%',
+          isFinite(req) ? fmtU(req) : '–', isFinite(req) ? fmtU(add) : '–'
+        ];
+        cells.forEach(function(text, i) {
+          var td = document.createElement('td');
+          td.className = 'right';
+          if (i === 5) deltaCell(td, r.total - current); else td.textContent = text;
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+    }
+
+    var slider = el('alloc-slider'), box = el('alloc');
+    slider.addEventListener('input', function() { box.value = slider.value; recalc(); });
+    box.addEventListener('input', function() { slider.value = box.value; recalc(); });
+    ['cap-usdc', 'cap-kvcm', 'target-vapr'].forEach(function(id) {
+      el(id).addEventListener('input', recalc);
+    });
+    recalc();
+  })();
+  </script>
+</body>
+</html>
