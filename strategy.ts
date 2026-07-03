@@ -57,8 +57,10 @@ const REF_PATIENCE_WEEKS = 8;
 // Historical inflows at least this large (Δ external LP, % of gauge supply)
 // count as "sized" — evidence that capital of consequence arrived.
 const SIZED_INFLOW_PCT = 20;
-// Default LP deposit pre-filled in the scenario controls.
-const DEFAULT_DEPOSIT_USD = 100_000;
+// Additional LP deposit pre-filled in the scenario controls. Zero: the page
+// opens on the current position — our addresses already hold a gauge stake —
+// and the input models capital on top of it.
+const DEFAULT_DEPOSIT_USD = 0;
 
 // Gauge LP held by these addresses counts as ours, not external — keep in
 // sync with OUR_ADDRESSES in history.ts.
@@ -601,10 +603,10 @@ async function main() {
   //   ceiling = p25 + EPOCHS_PER_YEAR × F / (depth × H)
   // (round trip ≈ F²/depth, spread over H weeks, as an APR on F). Micro
   // farmers below F face no friction but take no meaningful emissions share,
-  // so the premium is priced for the smallest farmer worth deterring, at the
-  // depth of the default scenario (pool + default deposit). Capped by the
+  // so the premium is priced for the smallest farmer worth deterring, at
+  // today's pool depth (the depth a farmer actually faces). Capped by the
   // lowest displayed vAPR that ever drew a sized inflow into our own gauge.
-  const refDepth = poolTvlUsd + DEFAULT_DEPOSIT_USD;
+  const refDepth = poolTvlUsd;
   const frictionPremiumPct =
     refDepth > 0
       ? ((EPOCHS_PER_YEAR * REF_FARMER_USD) / (refDepth * REF_PATIENCE_WEEKS)) * 100
@@ -815,14 +817,19 @@ async function main() {
 </head>
 <body>
   <h1>Aerodrome Own-Pool Strategy <span class="muted">→ <a href="index.html">voting dashboard</a></span></h1>
-  <p class="voter">Voter: <code>${escapeHtml(voterAddress)}</code> · Pool: <code>${POOL}</code> (${escapeHtml(
+  <p class="voter">Voter: <code>${escapeHtml(voterAddress)}</code> · Treasury LP: <code>${
+    OUR_LP_ADDRESSES[1]
+  }</code> · Pool: <code>${POOL}</code> (${escapeHtml(
     snapshot.pool.symbol
   )}) · Snapshot: ${snapshot.generatedAt.slice(0, 16).replace("T", " ")} UTC · Epoch ${latestEpoch} (${epochDate})</p>
   <div class="intro">
     <p>This page models farming our own votes: instead of voting for pools with the best fees and bribes,
     point some or all of our ${fmt(voterPower)} votes at our own ${escapeHtml(snapshot.pool.symbol)} pool so it
     receives a share of the weekly AERO emissions, then capture those emissions ourselves by staking LP in the gauge.
-    Votes cast now take effect at the next epoch flip (Thursday 00:00 UTC).</p>
+    Our addresses already hold ${(ourStakeShare * 100).toFixed(0)}% of the gauge (${usdFmt(
+    ourStakedUsd
+  )} of ${usdFmt(stakedTvlUsd)} staked), so the scenario opens on the current position and the deposit input
+    is additional capital on top. Votes cast now take effect at the next epoch flip (Thursday 00:00 UTC).</p>
   </div>
 
   <h2>Snapshot</h2>
@@ -871,7 +878,7 @@ async function main() {
         <input type="number" id="alloc" min="0" max="100" step="0.5" value="${defaultAllocationPct}">%
       </span>
     </label>
-    <label>Capital to deposit ($)
+    <label>Additional capital to deposit ($)
       <span class="slider-row">
         <input type="range" id="cap-slider" min="0" max="1000000" step="10000" value="${DEFAULT_DEPOSIT_USD}">
         <input type="number" id="cap" min="0" step="1000" value="${DEFAULT_DEPOSIT_USD}">
@@ -919,9 +926,9 @@ async function main() {
   <p class="muted">Proportional column is the baseline strategy — our power split across the top-5
   bluechip/stable pools by fees+bribes — for epoch ${latestEpoch} (trailing ${TRAILING_EPOCHS}-epoch average: ${usdFmt(
     baselineEarningsTrailing
-  )}/wk), not the votes as currently cast. Scenario assumes incumbent stakers (${usdFmt(
-    stakedTvlUsd
-  )}) neither add nor remove liquidity.</p>
+  )}/wk), not the votes as currently cast. Scenario assumes existing stakes — ours (${usdFmt(
+    ourStakedUsd
+  )}) and external (${usdFmt(stakedTvlUsd - ourStakedUsd)}) — neither grow nor shrink.</p>
 
   <h2>Mercenary deterrence: TVL to add before the flip</h2>
   <p class="intro">Once emissions land, the gauge's displayed vAPR = annualized emissions ÷ staked TVL.
@@ -1097,7 +1104,7 @@ async function main() {
     that ever drew a sized inflow ≥${SIZED_INFLOW_PCT}% of gauge supply), rounded and clamped to 5–50%. The
     friction premium = ${fmt(EPOCHS_PER_YEAR, 1)} × F ÷ (depth × H) prices the round trip of a ${usdFmt(
     REF_FARMER_USD
-  )} farmer with ${REF_PATIENCE_WEEKS}-week patience at the default scenario's depth; smaller farmers face no
+  )} farmer with ${REF_PATIENCE_WEEKS}-week patience at the current pool depth; smaller farmers face no
     friction but take no meaningful emissions share. A starting point, not a hard rule.</li>
   </div>
 
