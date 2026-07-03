@@ -3,7 +3,8 @@
   "scripts": {
     "fetch": "node --env-file-if-exists=.env fetch.ts",
     "analyse": "node analyse.ts",
-    "build": "node build.ts"
+    "build": "node build.ts",
+    "strategy": "node --env-file-if-exists=.env strategy.ts"
   },
   "dependencies": {
     "viem": "^2"
