@@ -599,16 +599,16 @@ async function main() {
 
   // Deterrence model. A farmer of size F with patience H weeks enters only if
   // their pro-rata emissions beat the market hurdle h PLUS their amortized
-  // round-trip impact (≈ F²/depth over H weeks):
-  //   annualEmissions / S  ≥  h + EPOCHS_PER_YEAR × F / (S × H)   (depth ≈ S)
-  // Rearranged, the pool is safe while
-  //   S  ≥  (annualEmissions − allowance) / h,
-  // where allowance = EPOCHS_PER_YEAR × F / H is a fixed slice of annual
-  // emissions that friction covers with no TVL backing at all. Approximating
-  // depth by staked TVL and ignoring the farmer's own dilution both err on
-  // the safe side. Micro farmers below F face no friction but take no
-  // meaningful emissions share. The user-editable input is the market hurdle
-  // h itself, defaulting to the cross-sectional p25.
+  // round-trip impact (≈ F²/depth over H weeks). Swap depth is staked TVL S
+  // plus the unstaked reserves U, so the pool is safe while
+  //   annualEmissions  ≤  h × S + allowance × S / (S + U),
+  // where allowance = EPOCHS_PER_YEAR × F / H — a nearly depth-independent
+  // slice of annual emissions that friction covers, because the premium a
+  // farmer demands falls as fast as TVL grows. The page's JS solves the
+  // resulting quadratic exactly; ignoring the farmer's own dilution errs on
+  // the safe side. Micro farmers below F face little friction but take no
+  // meaningful emissions share. The hurdle h, F, and H are all editable on
+  // the page; h defaults to the cross-sectional p25.
   const frictionAllowanceUsd =
     (EPOCHS_PER_YEAR * REF_FARMER_USD) / REF_PATIENCE_WEEKS;
   const defaultHurdlePct = isFinite(crossSection.amm.p25)
@@ -884,15 +884,20 @@ async function main() {
     <label>Market hurdle rate (%)
       <input type="number" id="hurdle" min="0.1" step="0.5" value="${defaultHurdlePct}">
     </label>
+    <label>Smallest farmer to deter ($)
+      <input type="number" id="ref-farmer" min="1000" step="1000" value="${REF_FARMER_USD}">
+    </label>
+    <label>Farmer patience (weeks)
+      <input type="number" id="ref-patience" min="1" step="1" value="${REF_PATIENCE_WEEKS}">
+    </label>
   </div>
   <p class="muted">Market hurdle default of ${defaultHurdlePct}% is the TVL-weighted p25 emissions-vAPR
   across ${crossSection.amm.n} comparable AMM gauges (see <a href="#inferred-ceiling">Inferred vAPR
-  ceiling</a>) — what mercenary capital earns elsewhere. Friction is handled separately: a ${usdFmt(
-    REF_FARMER_USD
-  )} farmer with ${REF_PATIENCE_WEEKS}-week patience forgoes ≈ ${usdFmt(
-    frictionAllowanceUsd
-  )}/yr of emissions to round-trip price impact, so that slice needs no TVL backing at any depth.
-  Edit freely — the hurdle only drives the deterrence rows.</p>
+  ceiling</a>) — what mercenary capital earns elsewhere. Friction is handled separately: a
+  <span class="ref-f-usd">${usdFmt(REF_FARMER_USD)}</span> farmer with
+  <span class="ref-h-wk">${REF_PATIENCE_WEEKS}</span>-week patience forgoes ≈
+  <span class="allow-usd">${usdFmt(frictionAllowanceUsd)}</span>/yr of emissions to round-trip price
+  impact, so that slice needs almost no TVL backing. The three inputs above drive the deterrence rows.</p>
 
   <div class="scroll"><table id="emissions-table">
     <thead><tr><th></th><th class="right">Value</th></tr></thead>
@@ -928,18 +933,18 @@ async function main() {
   their round-trip price impact: entering means buying the ${escapeHtml(
     t0.symbol
   )} leg through this thin pool and exiting means selling it back, a round trip costing ≈ F² ÷ depth.
-  Amortized over their patience that friction covers a fixed ≈ ${usdFmt(
+  Amortized over their patience that friction covers a ≈ <span class="allow-usd">${usdFmt(
     frictionAllowanceUsd
-  )}/yr slice of emissions with no TVL at all; every emission dollar beyond it needs 1 ÷ hurdle
+  )}</span>/yr slice of emissions with almost no TVL; every emission dollar beyond it needs 1 ÷ hurdle
   dollars of staked TVL. This stays consistent as TVL grows (unlike a fixed vAPR ceiling, since the
   friction premium shrinks with depth). Historically that friction, more than the displayed vAPR,
   is what kept capital out.</p>
   <div class="scroll"><table id="deter-table">
     <tbody>
       <tr><td>vAPR after our deposit</td><td class="right big" id="det-vapr"></td></tr>
-      <tr><td>Staked TVL required to deter ≥ ${usdFmt(
+      <tr><td>Staked TVL required to deter ≥ <span class="ref-f-usd">${usdFmt(
         REF_FARMER_USD
-      )} farmers</td><td class="right" id="det-req"></td></tr>
+      )}</span> farmers</td><td class="right" id="det-req"></td></tr>
       <tr><td>Displayed vAPR at that TVL</td><td class="right" id="det-safe"></td></tr>
       <tr class="total"><td>Additional TVL to add before flip</td><td class="right big" id="det-add"></td></tr>
     </tbody>
@@ -952,7 +957,8 @@ async function main() {
   <p class="muted">Break-even holding for a farmer entering after our deposit, at the scenario's emissions.
   Round trip ≈ F²/depth (constant-product impact on the ${escapeHtml(
     t0.symbol
-  )} leg, in and out); income = the farmer's pro-rata share of weekly emissions after their own dilution.</p>
+  )} leg, in and out); income = the farmer's pro-rata share of weekly emissions after their own dilution.
+  A red break-even is shorter than the farmer patience set above — that size is <em>not</em> deterred.</p>
 
   <h2 id="inferred-ceiling">Inferred vAPR ceiling</h2>
   <p class="intro">Two independent views of the vAPR level at which mercenary capital shows up:
@@ -1098,15 +1104,19 @@ async function main() {
       0,
       6
     )}…) — LP staked by anyone else counts as external.</li>
-    <li>Deterrence TVL = max(0, (annualized emissions − ${usdFmt(
-      frictionAllowanceUsd
-    )}) ÷ hurdle). The allowance = ${fmt(EPOCHS_PER_YEAR, 1)} × F ÷ H is the round-trip impact of a ${usdFmt(
-    REF_FARMER_USD
-  )} farmer with ${REF_PATIENCE_WEEKS}-week patience, amortized; it is depth-independent because the premium
-    such a farmer demands (${fmt(EPOCHS_PER_YEAR, 1)}·F/(depth·H)) falls exactly as fast as TVL grows.
-    Approximating swap depth by staked TVL and ignoring the farmer's own dilution both err on the safe side.
-    Smaller farmers face no friction but take no meaningful emissions share; the sized-inflow record
-    (external capital of consequence only ever arrived above ${
+    <li>Deterrence TVL S solves annualized emissions = hurdle × S + allowance × S ÷ (S + U) exactly,
+    where allowance = ${fmt(
+      EPOCHS_PER_YEAR,
+      1
+    )} × F ÷ H is the reference farmer's amortized round trip and U = ${usdFmt(
+    poolTvlUsd - stakedTvlUsd
+  )} is the unstaked reserve depth (swap depth = S + U). The friction term is nearly depth-independent
+    because the premium such a farmer demands (${fmt(
+      EPOCHS_PER_YEAR,
+      1
+    )}·F/(depth·H)) falls as fast as TVL grows. Ignoring the farmer's own dilution errs on the safe side.
+    Farmers smaller than F face little friction but take no meaningful emissions share; the sized-inflow
+    record (external capital of consequence only ever arrived above ${
       isFinite(historical.minSizedInflowVapr) ? historical.minSizedInflowVapr.toFixed(0) + "%" : "n/a"
     } displayed vAPR) is the empirical sanity check. A starting point, not a hard rule.</li>
   </div>
@@ -1163,10 +1173,23 @@ async function main() {
         ' + ' + fmtN(capital / 2 / S.prices.token0) + ' ' + S.pool.token0.symbol +
         ' (' + fmtU(capital / 2) + ')';
       var hurdle = parseFloat(el('hurdle').value) || 0;
-      // Staked TVL needed so no farmer of the reference size/patience profits:
-      // (annual emissions − friction allowance) / hurdle, floored at zero.
+      var refF = parseFloat(el('ref-farmer').value) || 0;
+      var refH = parseFloat(el('ref-patience').value) || 0;
+      var allowance = refH > 0 ? EPOCHS_PER_YEAR * refF / refH : 0;
+      document.querySelectorAll('.ref-f-usd').forEach(function(n) { n.textContent = fmtU(refF); });
+      document.querySelectorAll('.ref-h-wk').forEach(function(n) { n.textContent = refH; });
+      document.querySelectorAll('.allow-usd').forEach(function(n) { n.textContent = fmtU(allowance); });
+      // Staked TVL S needed so no farmer of the reference size/patience profits.
+      // Swap depth is S plus the unstaked reserves U, so solve exactly:
+      //   annual = hurdle·S + allowance·S/(S+U)
+      // i.e. hurdle·S² + (hurdle·U + allowance − annual)·S − annual·U = 0.
+      var unstaked = Math.max(0, S.pool.poolTvlUsd - S.pool.stakedTvlUsd);
       var deterTvl = function(annualUsd) {
-        return hurdle > 0 ? Math.max(0, (annualUsd - S.hurdle.frictionAllowanceUsd) / (hurdle / 100)) : Infinity;
+        if (hurdle <= 0) return Infinity;
+        if (annualUsd <= 0) return 0;
+        var h = hurdle / 100;
+        var b = h * unstaked + allowance - annualUsd;
+        return (-b + Math.sqrt(b * b + 4 * h * annualUsd * unstaked)) / (2 * h);
       };
       var baselineAlloc = S.baselineVotesOnPool / S.voterPower;
       // Baseline = proportional voting income + what our existing stake would
@@ -1201,12 +1224,16 @@ async function main() {
         ? (annualUsd / tvlReq * 100).toFixed(1) + '%' : '–';
       el('det-add').textContent = isFinite(tvlReq) ? fmtU(extra) : '–';
 
-      // Break-even holding period for reference farmer sizes: round-trip price
-      // impact of the token0 leg (≈ F²/depth) vs their pro-rata emissions.
+      // Break-even holding period per farmer size: round-trip price impact of
+      // the token0 leg (≈ F²/depth) vs their pro-rata emissions. Red rows
+      // break even within the reference patience — i.e. they are NOT deterred.
       var depth = S.pool.poolTvlUsd + capital;
       var mercBody = el('merc-body');
       mercBody.textContent = '';
-      [10000, 25000, 100000].forEach(function(F) {
+      var sizes = [refF, 25000, 100000]
+        .filter(function(F, i, a) { return F > 0 && a.indexOf(F) === i; })
+        .sort(function(a, b) { return a - b; });
+      sizes.forEach(function(F) {
         var cost = depth > 0 ? F * F / depth : Infinity;
         var income = s.stakedAfter + F > 0 ? s.weeklyUsd * F / (s.stakedAfter + F) : 0;
         var weeks = income > 0 && isFinite(cost) ? cost / income : Infinity;
@@ -1216,9 +1243,10 @@ async function main() {
           isFinite(cost) ? fmtU(cost) + ' (' + (cost / F * 100).toFixed(0) + '%)' : '–',
           fmtU(income),
           !isFinite(weeks) ? 'never' : weeks >= 104 ? '2+ years' : weeks.toFixed(1) + ' wk'
-        ].forEach(function(text) {
+        ].forEach(function(text, i) {
           var td = document.createElement('td');
           td.className = 'right';
+          if (i === 3 && weeks < refH) td.classList.add('delta-neg');
           td.textContent = text;
           tr.appendChild(td);
         });
@@ -1254,7 +1282,9 @@ async function main() {
     }
     bindSlider('alloc-slider', 'alloc');
     bindSlider('cap-slider', 'cap');
-    el('hurdle').addEventListener('input', recalc);
+    ['hurdle', 'ref-farmer', 'ref-patience'].forEach(function(id) {
+      el(id).addEventListener('input', recalc);
+    });
     recalc();
   })();
   </script>
