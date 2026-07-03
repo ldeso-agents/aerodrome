@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 // -- Type --
 
@@ -122,6 +122,35 @@ records.sort((a, b) => b.epoch_ts - a.epoch_ts || b.pool_votes - a.pool_votes);
 
 const voterAddress = records[0]?.voter_address ?? "unknown";
 
+// LP emissions captured in our own pool's gauge, per epoch: streaming rate ×
+// week × the gauge share held by our addresses (voter + treasury LP, see
+// history.ts), valued at the epoch's AERO price. These belong to the actual
+// strategy only — under the alternatives our votes leave the pool and the
+// gauge streams next to nothing.
+type LpEarn = { earnUsd: number; sharePct: number };
+const lpEarnByEpoch = new Map<number, LpEarn>();
+if (existsSync("pool-history.csv")) {
+  const lines = readFileSync("pool-history.csv", "utf-8").trimEnd().split("\n");
+  const h = lines[0].split(",");
+  const col = (name: string) => h.indexOf(name);
+  for (let i = 1; i < lines.length; i++) {
+    const c = lines[i].split(",");
+    const ts = parseInt(c[col("epoch_ts")]);
+    const rate = parseFloat(c[col("reward_rate_aero_s")]);
+    const ourLp = parseFloat(c[col("our_gauge_lp")]);
+    const gaugeLp = parseFloat(c[col("gauge_supply_lp")]);
+    const aeroUsd = parseFloat(c[col("aero_usd")]);
+    if (!(ts > 0) || !(rate > 0) || !(ourLp > 0) || !(gaugeLp > 0) || !(aeroUsd > 0))
+      continue;
+    const share = ourLp / gaugeLp;
+    lpEarnByEpoch.set(ts, {
+      earnUsd: rate * 7 * 24 * 3600 * share * aeroUsd,
+      sharePct: share * 100,
+    });
+  }
+}
+const lpEarnAt = (ts: number) => lpEarnByEpoch.get(ts)?.earnUsd ?? 0;
+
 // 2. Compute epoch totals
 const epochTotals = new Map<number, number>();
 const actualVotesByEpoch = new Map<number, number>();
@@ -166,7 +195,7 @@ for (const [ts, epochRecords] of byEpoch) {
   const trueActualVotes = actualVotesByEpoch.get(ts) ?? 0;
   const sum = (fn: (r: EpochRecord) => number) =>
     epochRecords.reduce((s, r) => s + fn(r), 0);
-  const actualEarn = sum((r) => r.actual_earnings_usd);
+  const actualEarn = sum((r) => r.actual_earnings_usd) + lpEarnAt(ts);
   const propBc5Earn = sum((r) => r.prop_bc5_earnings_usd);
   const opt10BcEarn = sum((r) => r.opt_10bc_earnings_usd);
   const opt10Earn = sum((r) => r.opt_10_earnings_usd);
@@ -518,7 +547,8 @@ for (let i = 0; i < sortedEpochs.length; i++) {
   const totalPoolVotes = sum((r) => r.pool_votes);
   const totalPoolFeesBribes = sum((r) => r.fees_bribes_usd);
   const totalPoolApr = apr(totalPoolFeesBribes, totalPoolVotes, first.aero_usd);
-  const totalActualEarn = sum((r) => r.actual_earnings_usd);
+  const lp = lpEarnByEpoch.get(first.epoch_ts);
+  const totalActualEarn = sum((r) => r.actual_earnings_usd) + (lp?.earnUsd ?? 0);
   const totalPropBc5Votes = sum((r) => r.prop_bc5_votes);
   const totalPropBc5Earn = sum((r) => r.prop_bc5_earnings_usd);
   const totalOpt10BcVotes = sum((r) => r.opt_10bc_votes);
@@ -571,6 +601,23 @@ for (let i = 0; i < sortedEpochs.length; i++) {
             <td class="right">${usdFmt(totalOpt10Earn)}</td>
           </tr>`;
 
+  // Our LP in the own-pool gauge earns AERO emissions on top of voting income;
+  // the alternative strategies forgo this (their votes leave the pool).
+  const lpRow = lp
+    ? `          <tr>
+            <td></td>
+            <td colspan="8">LP emissions captured (own-pool gauge, ${lp.sharePct.toFixed(
+              0
+            )}% of stake)</td>
+            <td class="sep"></td>
+            <td></td>
+            <td class="right">${usdFmt(lp.earnUsd)}</td>
+            <td class="sep"></td><td></td><td class="right">$0</td>
+            <td class="sep"></td><td></td><td class="right">$0</td>
+            <td class="sep"></td><td></td><td class="right">$0</td>
+          </tr>`
+    : "";
+
   const rows = epochRecords
     .map((r, j) => {
       const cls = poolTypeLabel[r.pool_type] ? r.pool_type : "";
@@ -618,7 +665,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
   sections.push(`  <details>
     <summary>Epoch ${first.epoch_number} ${epochTiming}</summary>
     <div class="scroll">
-      <table data-aero-usd="${first.aero_usd}" data-voter-total="${trueActualVotes}" data-epoch-num="${first.epoch_number}">
+      <table data-aero-usd="${first.aero_usd}" data-voter-total="${trueActualVotes}" data-epoch-num="${first.epoch_number}" data-lp-earn="${lp?.earnUsd ?? 0}">
         <thead>
           <tr>
             <th>#</th>
@@ -646,6 +693,7 @@ for (let i = 0; i < sortedEpochs.length; i++) {
         </thead>
         <tbody>
   ${rows}
+${lpRow}
   ${totalRow}
         </tbody>
       </table>
@@ -665,7 +713,8 @@ const buildVoteList = (
   voteFn: (r: EpochRecord) => number,
   pctFn: (r: EpochRecord) => number,
   earnFn: (r: EpochRecord) => number,
-  strategyAttr: string = ""
+  strategyAttr: string = "",
+  extraEarn: number = 0
 ) => {
   const items = latestRecords
     .filter((r) => Math.round(pctFn(r)) > 0)
@@ -678,7 +727,7 @@ const buildVoteList = (
     )
     .join("\n");
   if (!items) return "";
-  const totalEarn = latestRecords.reduce((s, r) => s + earnFn(r), 0);
+  const totalEarn = latestRecords.reduce((s, r) => s + earnFn(r), 0) + extraEarn;
   return `      <div class="vote-strategy"${strategyAttr}><strong>${label}</strong><ul>\n${items}\n      </ul><p class="vote-earnings">Earnings: ${usdFmt(
     totalEarn
   )}</p></div>`;
@@ -690,7 +739,8 @@ const strategyVotesHtml = [
     (r) => r.actual_votes,
     (r) => r.actual_vote_pct,
     (r) => r.actual_earnings_usd,
-    ' data-strategy="current"'
+    ' data-strategy="current"',
+    lpEarnAt(sortedEpochs[0]?.[0] ?? 0)
   ),
   buildVoteList(
     "PropBC5 Votes",
@@ -788,12 +838,14 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
   <h1>Aerodrome Votes \u2192 <a href="votes.csv">votes.csv</a></h1>
-  <p class="voter">Voter: <code>${escapeHtml(voterAddress)}</code></p>
+  <p class="voter">Voter: <code>${escapeHtml(voterAddress)}</code> · Treasury LP: <code>0xf63af2c60547b7e4515a0bb2bcd5e6c09f29ecf5</code></p>
   <div class="intro">
     <p>This dashboard tracks weekly earnings from a voter on <a href="https://aerodrome.finance">Aerodrome Finance</a> and compares the voter's actual results against alternative allocation strategies. Each epoch lasts one week; the voter locks AERO tokens and distributes votes across liquidity pools to earn a share of each pool's fees and bribes, proportional to their vote share.</p>
     <p>The chart below plots actual and predicted earnings and APR per epoch. Four voting strategies are shown:</p>
     <ul>
-      <li><strong>Actual</strong> \u2013 the voter's real vote allocation and resulting earnings.</li>
+      <li><strong>Actual</strong> \u2013 the voter's real vote allocation and resulting earnings, including
+      AERO emissions captured by the LP our addresses (voter + treasury) have staked in the own pool's gauge.
+      The alternative strategies forgo that income: without our votes the gauge streams next to nothing.</li>
       <li><strong>PropBC5</strong> \u2013 votes split proportionally across the top 5 blue-chip and stable pools.</li>
       <li><strong>Opt10BC</strong> \u2013 votes optimally allocated across up to 10 blue-chip pools to maximize earnings (water-filling optimization).</li>
       <li><strong>Opt10</strong> \u2013 same optimization but across all pools, not limited to blue chips.</li>
@@ -856,6 +908,7 @@ ${sections.join("\n")}
       var aeroUsd = parseFloat(table.dataset.aeroUsd);
       var voterTotal = parseFloat(table.dataset.voterTotal);
       var epochNum = parseInt(table.dataset.epochNum);
+      var lpEarn = parseFloat(table.dataset.lpEarn) || 0;
       var rows = table.querySelectorAll('tbody tr:not(.total)');
       rows.forEach(function(row) {
         var cell = row.querySelector('.actual-pct-cell');
@@ -871,7 +924,9 @@ ${sections.join("\n")}
         cell.appendChild(document.createTextNode('%'));
       });
       function recalc() {
-        var totalVotes = 0, totalEarn = 0, totalPct = 0;
+        // LP emissions are held fixed when editing votes; reallocation effects
+        // on the gauge rate are modeled on the strategy page instead.
+        var totalVotes = 0, totalEarn = lpEarn, totalPct = 0;
         var inputs = [];
         var rowsInfo = [];
         rows.forEach(function(row) {
