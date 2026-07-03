@@ -801,7 +801,10 @@ async function main() {
       </span>
     </label>
     <label>Capital to deposit ($)
-      <input type="number" id="cap" min="0" step="1000" value="100000">
+      <span class="slider-row">
+        <input type="range" id="cap-slider" min="0" max="1000000" step="10000" value="100000">
+        <input type="number" id="cap" min="0" step="1000" value="100000">
+      </span>
       <span class="muted" id="cap-split"></span>
     </label>
     <label>Target vAPR ceiling (%)
@@ -1090,12 +1093,14 @@ async function main() {
       });
     }
 
-    var slider = el('alloc-slider'), box = el('alloc');
-    slider.addEventListener('input', function() { box.value = slider.value; recalc(); });
-    box.addEventListener('input', function() { slider.value = box.value; recalc(); });
-    ['cap', 'target-vapr'].forEach(function(id) {
-      el(id).addEventListener('input', recalc);
-    });
+    function bindSlider(sliderId, boxId) {
+      var slider = el(sliderId), box = el(boxId);
+      slider.addEventListener('input', function() { box.value = slider.value; recalc(); });
+      box.addEventListener('input', function() { slider.value = box.value; recalc(); });
+    }
+    bindSlider('alloc-slider', 'alloc');
+    bindSlider('cap-slider', 'cap');
+    el('target-vapr').addEventListener('input', recalc);
     recalc();
   })();
   </script>
