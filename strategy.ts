@@ -792,11 +792,9 @@ async function main() {
         <input type="number" id="alloc" min="0" max="100" step="0.5" value="${defaultAllocationPct}">%
       </span>
     </label>
-    <label>${escapeHtml(t1.symbol)} to deposit ($)
-      <input type="number" id="cap-usdc" min="0" step="1000" value="50000">
-    </label>
-    <label>${escapeHtml(t0.symbol)} to deposit ($)
-      <input type="number" id="cap-kvcm" min="0" step="1000" value="50000">
+    <label>Capital to deposit ($)
+      <input type="number" id="cap" min="0" step="1000" value="100000">
+      <span class="muted" id="cap-split"></span>
     </label>
     <label>Target vAPR ceiling (%)
       <input type="number" id="target-vapr" min="0.1" step="1" value="${inferredCeiling}">
@@ -967,7 +965,11 @@ async function main() {
   )} ${usdFmt(price0.price, 4)}); no price-impact modeling for acquiring ${escapeHtml(
     t0.symbol
   )} or for AERO sell pressure from farming.</li>
-    <li>LP deposits into a vAMM pool must be balanced 50/50 by value at deposit time; the two capital inputs are summed into one position.</li>
+    <li>LP deposits into a vAMM pool must be balanced 50/50 by value at deposit time, so the ${escapeHtml(
+      t0.symbol
+    )}/${escapeHtml(
+    t1.symbol
+  )} split cannot be chosen: half the deposit's value must be provided as each token (the scenario shows the implied amounts at current prices).</li>
     <li>Cross-sectional hurdle: emissions-vAPR = gauge streaming rate × 52.14 weeks × AERO price ÷ staked TVL,
     over live gauges streaming emissions; tokens priced via Alchemy spot with prices.csv fallback, gauges with
     unpriceable tokens skipped. Pool "type" from LpSugar (≤ 0 = basic AMM, &gt; 0 = CL).</li>
@@ -1024,7 +1026,11 @@ async function main() {
 
     function recalc() {
       var alloc = Math.min(100, Math.max(0, parseFloat(el('alloc').value) || 0)) / 100;
-      var capital = (parseFloat(el('cap-usdc').value) || 0) + (parseFloat(el('cap-kvcm').value) || 0);
+      var capital = parseFloat(el('cap').value) || 0;
+      // A volatile vAMM deposit is balanced 50/50 by value — the split is not a choice.
+      el('cap-split').textContent = '= ' + fmtU(capital / 2) + ' ' + S.pool.token1.symbol +
+        ' + ' + fmtN(capital / 2 / S.prices.token0) + ' ' + S.pool.token0.symbol +
+        ' (' + fmtU(capital / 2) + ')';
       var target = parseFloat(el('target-vapr').value) || 0;
       var current = S.currentEarningsUsd.latest;
       var s = scenario(alloc, capital);
@@ -1075,7 +1081,7 @@ async function main() {
     var slider = el('alloc-slider'), box = el('alloc');
     slider.addEventListener('input', function() { box.value = slider.value; recalc(); });
     box.addEventListener('input', function() { slider.value = box.value; recalc(); });
-    ['cap-usdc', 'cap-kvcm', 'target-vapr'].forEach(function(id) {
+    ['cap', 'target-vapr'].forEach(function(id) {
       el(id).addEventListener('input', recalc);
     });
     recalc();
