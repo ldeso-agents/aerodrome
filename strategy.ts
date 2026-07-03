@@ -803,6 +803,7 @@ async function main() {
     .delta-neg { color: #b91c1c; font-weight: 600; }
     .controls { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: .8rem 0 1rem; padding: .8rem; background: #f0f0f0; border-radius: 6px; font-size: .85rem; }
     .controls label { display: flex; flex-direction: column; gap: .3rem; font-weight: 600; }
+    .controls .hint { font-weight: 400; font-size: .75rem; color: #777; max-width: 16em; line-height: 1.35; }
     .controls input[type="number"] { width: 8em; font: inherit; padding: .25rem .4rem; border: 1px solid #bbb; border-radius: 4px; text-align: right; font-variant-numeric: tabular-nums; }
     .controls input[type="range"] { width: 14em; }
     .controls .slider-row { display: flex; align-items: center; gap: .6rem; font-weight: 400; }
@@ -883,6 +884,8 @@ async function main() {
     </label>
     <label>Market hurdle rate (%)
       <input type="number" id="hurdle" min="0.1" step="0.5" value="${defaultHurdlePct}">
+      <span class="hint">the yield mercenary capital already earns in other gauges (its opportunity
+      cost) — a farmer only moves here if our vAPR beats this plus their round-trip costs</span>
     </label>
     <label>Smallest farmer to deter ($)
       <input type="number" id="ref-farmer" min="1000" step="1000" value="${REF_FARMER_USD}">
