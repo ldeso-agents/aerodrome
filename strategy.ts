@@ -584,14 +584,19 @@ async function main() {
   const poolFeesBribesLatest = num("fees_bribes_usd", latestPoolRow);
   const epochDate = latestRows[0][idx("epoch_date")];
 
+  // Baseline: the proportional strategy (our power split across the top-5
+  // bluechip/stable pools by fees+bribes, computed in analyse.ts), not the
+  // votes as cast — deltas then read as "own-pool farming vs the strategy we
+  // would otherwise run", undistorted by votes already parked on our pool.
+  const baselineVotesOnPool = num("prop_bc5_votes", latestPoolRow);
   const epochEarnings = (n: number) =>
-    epochRows(n).reduce((sum, c) => sum + num("actual_earnings_usd", c), 0);
-  const currentEarningsLatest = epochEarnings(latestEpoch);
+    epochRows(n).reduce((sum, c) => sum + num("prop_bc5_earnings_usd", c), 0);
+  const baselineEarningsLatest = epochEarnings(latestEpoch);
   const trailingWindow = Array.from(
     { length: TRAILING_EPOCHS },
     (_, i) => latestEpoch - i
   );
-  const currentEarningsTrailing =
+  const baselineEarningsTrailing =
     trailingWindow.reduce((sum, n) => sum + epochEarnings(n), 0) /
     TRAILING_EPOCHS;
   const poolFeesBribesTrailing =
@@ -600,16 +605,18 @@ async function main() {
       0
     ) / TRAILING_EPOCHS;
 
-  // Pools we currently vote on (excluding the target pool), for the forgone-earnings model
+  // Pools the proportional baseline votes on (excluding the target pool), for
+  // the forgone-earnings model. otherVotes subtracts our *actual* on-chain
+  // votes, matching the convention analyse.ts uses for prop_bc5_earnings_usd.
   const otherPools: OtherPool[] = latestRows
     .filter(
       (c) =>
-        num("actual_votes", c) > 0 &&
+        num("prop_bc5_votes", c) > 0 &&
         c[idx("pool_address")].toLowerCase() !== POOL.toLowerCase()
     )
     .map((c) => ({
       name: c[idx("pool_name")],
-      votes: num("actual_votes", c),
+      votes: num("prop_bc5_votes", c),
       otherVotes: num("pool_votes", c) - num("actual_votes", c),
       reward: num("fees_bribes_usd", c),
     }));
@@ -639,9 +646,10 @@ async function main() {
     poolVotes,
     voterPower,
     voterVotesOnPool,
-    currentEarningsUsd: {
-      latest: currentEarningsLatest,
-      trailing: currentEarningsTrailing,
+    baselineVotesOnPool,
+    baselineEarningsUsd: {
+      latest: baselineEarningsLatest,
+      trailing: baselineEarningsTrailing,
       trailingEpochs: TRAILING_EPOCHS,
     },
     otherPools,
@@ -773,11 +781,11 @@ async function main() {
           <td>Gauge streaming this epoch</td><td class="right">${fmt(
             gaugeWeeklyAero
           )} AERO/wk</td></tr>
-      <tr><td>Current voting earnings, epoch ${latestEpoch}</td><td class="right">${usdFmt(
-    currentEarningsLatest
+      <tr><td>Proportional-strategy earnings, epoch ${latestEpoch}</td><td class="right">${usdFmt(
+    baselineEarningsLatest
   )}/wk</td>
           <td>Trailing ${TRAILING_EPOCHS}-epoch average</td><td class="right">${usdFmt(
-            currentEarningsTrailing
+            baselineEarningsTrailing
           )}/wk</td></tr>
     </tbody>
   </table></div>
@@ -819,21 +827,22 @@ async function main() {
     </tbody>
   </table></div>
 
-  <h2>Weekly income: current strategy vs own-pool farming</h2>
+  <h2>Weekly income: proportional strategy vs own-pool farming</h2>
   <div class="scroll"><table id="compare-table">
-    <thead><tr><th>Income source</th><th class="right">Current</th><th class="right">Own-pool scenario</th></tr></thead>
+    <thead><tr><th>Income source</th><th class="right">Proportional</th><th class="right">Own-pool scenario</th></tr></thead>
     <tbody>
       <tr><td>LP emissions captured (our stake share)</td><td class="right">–</td><td class="right" id="cmp-lp"></td></tr>
       <tr><td>Voting: our pool's fees+bribes</td><td class="right" id="cmp-own-cur"></td><td class="right" id="cmp-own"></td></tr>
       <tr><td>Voting: other pools' fees+bribes</td><td class="right" id="cmp-other-cur"></td><td class="right" id="cmp-other"></td></tr>
       <tr class="total"><td>Total per week</td><td class="right" id="cmp-total-cur"></td><td class="right" id="cmp-total"></td></tr>
-      <tr><td>Net delta vs current</td><td class="right">–</td><td class="right" id="cmp-delta"></td></tr>
+      <tr><td>Net delta vs proportional</td><td class="right">–</td><td class="right" id="cmp-delta"></td></tr>
       <tr><td>Annualized delta</td><td class="right">–</td><td class="right" id="cmp-delta-year"></td></tr>
     </tbody>
   </table></div>
-  <p class="muted">Current column is epoch ${latestEpoch} actuals (trailing ${TRAILING_EPOCHS}-epoch average: ${usdFmt(
-    currentEarningsTrailing
-  )}/wk). Scenario assumes incumbent stakers (${usdFmt(
+  <p class="muted">Proportional column is the baseline strategy — our power split across the top-5
+  bluechip/stable pools by fees+bribes — for epoch ${latestEpoch} (trailing ${TRAILING_EPOCHS}-epoch average: ${usdFmt(
+    baselineEarningsTrailing
+  )}/wk), not the votes as currently cast. Scenario assumes incumbent stakers (${usdFmt(
     stakedTvlUsd
   )}) neither add nor remove liquidity.</p>
 
@@ -929,7 +938,7 @@ async function main() {
   <div class="scroll"><table id="ladder-table">
     <thead><tr>
       <th class="right">Allocation</th><th class="right">AERO/week</th><th class="right">$/week to pool</th>
-      <th class="right">LP income/week</th><th class="right">Total/week</th><th class="right">Δ vs current</th>
+      <th class="right">LP income/week</th><th class="right">Total/week</th><th class="right">Δ vs proportional</th>
       <th class="right">vAPR after deposit</th><th class="right">TVL for target</th><th class="right">Extra TVL needed</th>
     </tr></thead>
     <tbody id="ladder-body"></tbody>
@@ -958,7 +967,9 @@ async function main() {
     snapshot.pool.feesBribesUsd.trailing,
     2
   )}); voting more for our own pool doesn't create new fees, it only changes our share of them.</li>
-    <li>Other-pool voting income assumes the freed/remaining votes stay spread across our current pools in the same proportions.</li>
+    <li>The comparison baseline is the proportional strategy (power split across the top-5 bluechip/stable
+    pools by fees+bribes), not the votes as currently cast; other-pool voting income in the scenario spreads
+    the non-allocated votes across those same baseline pools in the same proportions.</li>
     <li>Incumbent staked TVL is assumed static; in practice mercenary TVL chases displayed vAPR — that response is exactly what the deterrence calculator is for.</li>
     <li>Prices are point-in-time (AERO ${usdFmt(aeroPrice.price, 4)}, ${escapeHtml(
     t0.symbol
@@ -1001,9 +1012,9 @@ async function main() {
       var stakedAfter = S.pool.stakedTvlUsd + capital;
       var lpIncome = stakedAfter > 0 ? weeklyUsd * capital / stakedAfter : 0;
       var ownVoteIncome = poolVotes > 0 ? S.pool.feesBribesUsd.latest * ourVotes / poolVotes : 0;
-      // Remaining votes spread across our other pools proportionally to today's allocation
-      var currentOther = S.voterPower - S.voterVotesOnPool;
-      var scale = currentOther > 0 ? (1 - alloc) * S.voterPower / currentOther : 0;
+      // Non-allocated votes spread across the proportional baseline's pools
+      var baselineOther = S.voterPower - S.baselineVotesOnPool;
+      var scale = baselineOther > 0 ? (1 - alloc) * S.voterPower / baselineOther : 0;
       var otherIncome = 0;
       S.otherPools.forEach(function(p) {
         var v = p.votes * scale;
@@ -1032,7 +1043,8 @@ async function main() {
         ' + ' + fmtN(capital / 2 / S.prices.token0) + ' ' + S.pool.token0.symbol +
         ' (' + fmtU(capital / 2) + ')';
       var target = parseFloat(el('target-vapr').value) || 0;
-      var current = S.currentEarningsUsd.latest;
+      var baseline = S.baselineEarningsUsd.latest;
+      var baselineAlloc = S.baselineVotesOnPool / S.voterPower;
       var s = scenario(alloc, capital);
 
       el('out-pool-votes').textContent = fmtN(s.poolVotes);
@@ -1041,14 +1053,14 @@ async function main() {
       el('out-emissions-usd').textContent = fmtU(s.weeklyUsd) + '/wk';
 
       el('cmp-lp').textContent = fmtU(s.lpIncome);
-      el('cmp-own-cur').textContent = fmtU(scenario(S.voterVotesOnPool / S.voterPower, 0).ownVoteIncome, 2);
+      el('cmp-own-cur').textContent = fmtU(scenario(baselineAlloc, 0).ownVoteIncome, 2);
       el('cmp-own').textContent = fmtU(s.ownVoteIncome, 2);
-      el('cmp-other-cur').textContent = fmtU(current - scenario(S.voterVotesOnPool / S.voterPower, 0).ownVoteIncome);
+      el('cmp-other-cur').textContent = fmtU(baseline - scenario(baselineAlloc, 0).ownVoteIncome);
       el('cmp-other').textContent = fmtU(s.otherIncome);
-      el('cmp-total-cur').textContent = fmtU(current);
+      el('cmp-total-cur').textContent = fmtU(baseline);
       el('cmp-total').textContent = fmtU(s.total);
-      deltaCell(el('cmp-delta'), s.total - current);
-      deltaCell(el('cmp-delta-year'), (s.total - current) * EPOCHS_PER_YEAR);
+      deltaCell(el('cmp-delta'), s.total - baseline);
+      deltaCell(el('cmp-delta-year'), (s.total - baseline) * EPOCHS_PER_YEAR);
 
       var tvlReq = target > 0 ? s.weeklyUsd * EPOCHS_PER_YEAR / (target / 100) : Infinity;
       var extra = Math.max(0, tvlReq - s.stakedAfter);
@@ -1071,7 +1083,7 @@ async function main() {
         cells.forEach(function(text, i) {
           var td = document.createElement('td');
           td.className = 'right';
-          if (i === 5) deltaCell(td, r.total - current); else td.textContent = text;
+          if (i === 5) deltaCell(td, r.total - baseline); else td.textContent = text;
           tr.appendChild(td);
         });
         body.appendChild(tr);
