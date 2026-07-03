@@ -29,9 +29,20 @@ const minterAbi = parseAbi(["function weekly() view returns (uint256)"]);
 
 const lpSugarAbi = parseAbi([
   "function all(uint256 _limit, uint256 _offset, uint256 _filter) view returns ((address lp, string symbol, uint8 decimals, uint256 liquidity, int24 type, int24 tick, uint160 sqrt_ratio, address token0, uint256 reserve0, uint256 staked0, address token1, uint256 reserve1, uint256 staked1, address gauge, uint256 gauge_liquidity, bool gauge_alive, address fee, address bribe, address factory, uint256 emissions, address emissions_token, uint256 emissions_cap, uint256 pool_fee, uint256 unstaked_fee, uint256 token0_fees, uint256 token1_fees, uint256 locked, uint256 emerging, uint32 created_at, address nfpm, address alm, address root)[])",
+  "function tokens(uint256 _limit, uint256 _offset, address _account, address[] _addresses) view returns ((address token_address, string symbol, uint8 decimals, uint256 account_balance, bool listed, bool emerging)[])",
 ]);
 
 const PAGE = 200;
+const ZERO = "0x0000000000000000000000000000000000000000" as const;
+
+// Cross-sectional hurdle population: live gauges with at least this much
+// staked TVL — below it, displayed vAPRs are dust-pool noise.
+const HURDLE_TVL_FLOOR = 100_000;
+// External-LP inflow classification (pool-history.csv, LP units): the relative
+// term filters compounding noise once the gauge is large, the absolute term
+// handles early epochs where external LP is near zero.
+const INFLOW_REL = 0.02; // of gauge supply
+const INFLOW_ABS = 0.005; // of pool supply
 
 // -- Types --
 
@@ -41,6 +52,28 @@ type OtherPool = {
   votes: number; // our current votes on the pool
   otherVotes: number; // votes from everyone else
   reward: number; // fees + bribes USD, latest epoch
+};
+type RawGauge = {
+  lp: string;
+  symbol: string;
+  type: number; // -1 volatile vAMM, 0 stable, >0 CL tick spacing
+  token0: string;
+  token1: string;
+  staked0: bigint;
+  staked1: bigint;
+  emissionsPerSec: number; // AERO/sec
+};
+type GaugeStat = { lp: string; symbol: string; type: number; stakedTvlUsd: number; vapr: number };
+type HistRow = {
+  epoch: number;
+  date: string;
+  status: string;
+  gaugeLp: number;
+  ourLp: number;
+  poolLp: number;
+  externalLp: number;
+  stakedTvlUsd: number;
+  vapr: number;
 };
 
 // -- Helpers (same conventions as fetch.ts) --
@@ -169,6 +202,128 @@ async function currentPriceUsd(
   throw new Error(`No price available for token ${addr}`);
 }
 
+/** Spot USD prices for many tokens via Alchemy's batch endpoint (25/request),
+ * falling back to the prices.csv cache per token. In-memory only. */
+async function batchSpotPrices(
+  addrs: string[],
+  alchemyKey: string,
+  cache: Map<string, { date: string; price: number }>
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (alchemyKey) {
+    for (let i = 0; i < addrs.length; i += 25) {
+      const chunk = addrs.slice(i, i + 25);
+      try {
+        const json = await postJson(
+          `https://api.g.alchemy.com/prices/v1/${alchemyKey}/tokens/by-address`,
+          { addresses: chunk.map((a) => ({ network: "base-mainnet", address: a })) }
+        );
+        for (const entry of json.data ?? []) {
+          if (entry.error) continue;
+          const usd = (entry.prices ?? []).find((p: any) => p.currency === "usd");
+          const price = usd ? parseFloat(usd.value) : NaN;
+          if (!isNaN(price) && price > 0) out.set(entry.address.toLowerCase(), price);
+        }
+      } catch (e) {
+        console.warn(`  Alchemy batch prices failed (${chunk.length} tokens): ${e}`);
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  for (const a of addrs) {
+    if (out.has(a)) continue;
+    const cached = cache.get(a);
+    if (cached && cached.price > 0) out.set(a, cached.price);
+  }
+  return out;
+}
+
+/** vAPR at which cumulative staked TVL crosses quantile q (population sorted by vAPR). */
+function weightedPercentile(stats: GaugeStat[], q: number): number {
+  const sorted = [...stats].sort((a, b) => a.vapr - b.vapr);
+  const total = sorted.reduce((s, x) => s + x.stakedTvlUsd, 0);
+  let cum = 0;
+  for (const x of sorted) {
+    cum += x.stakedTvlUsd;
+    if (cum >= q * total) return x.vapr;
+  }
+  return NaN;
+}
+
+/** pool-history.csv rows written by history.ts (npm run history). */
+function loadPoolHistory(): HistRow[] {
+  if (!existsSync("pool-history.csv")) return [];
+  const lines = readFileSync("pool-history.csv", "utf-8").trimEnd().split("\n");
+  const header = lines[0].split(",");
+  const idx = (name: string) => header.indexOf(name);
+  const rows: HistRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = lines[i].split(",");
+    rows.push({
+      epoch: parseInt(c[idx("epoch_number")]),
+      date: c[idx("epoch_date")],
+      status: c[idx("status")],
+      gaugeLp: parseFloat(c[idx("gauge_supply_lp")]),
+      ourLp: parseFloat(c[idx("our_gauge_lp")]),
+      poolLp: parseFloat(c[idx("pool_supply_lp")]),
+      externalLp: parseFloat(c[idx("external_lp")]),
+      stakedTvlUsd: parseFloat(c[idx("staked_tvl_usd")]),
+      vapr: parseFloat(c[idx("displayed_vapr_pct")]),
+    });
+  }
+  return rows.sort((a, b) => a.epoch - b.epoch);
+}
+
+type HistPoint = {
+  epoch: number;
+  date: string;
+  stakedTvlUsd: number;
+  vapr: number;
+  dExtPct: number; // external LP change over the epoch, % of gauge supply
+  inflow: boolean;
+};
+
+/** Classify each historical epoch as external-inflow vs quiet (LP units, so
+ * price moves don't masquerade as flows) and locate the vAPR level that
+ * separated them. ~40 points, so only order statistics — no fitting. */
+function inferHistoricalCeiling(hist: HistRow[]) {
+  const ok = hist.filter((r) => r.status === "ok" && r.stakedTvlUsd > 0);
+  const points: HistPoint[] = [];
+  for (let i = 0; i + 1 < ok.length; i++) {
+    const cur = ok[i];
+    const next = ok[i + 1];
+    if (next.epoch !== cur.epoch + 1) continue;
+    const dExt = next.externalLp - cur.externalLp;
+    const inflow = dExt > Math.max(INFLOW_REL * cur.gaugeLp, INFLOW_ABS * cur.poolLp);
+    points.push({
+      epoch: cur.epoch,
+      date: cur.date,
+      stakedTvlUsd: cur.stakedTvlUsd,
+      vapr: cur.vapr,
+      dExtPct: cur.gaugeLp > 0 ? (dExt / cur.gaugeLp) * 100 : 0,
+      inflow,
+    });
+  }
+  const inflows = points.filter((p) => p.inflow);
+  const quiets = points.filter((p) => !p.inflow);
+  // Decision stump: cutoff minimizing misclassifications of "inflow iff vAPR > v"
+  const candidates = [0, ...new Set(points.map((p) => p.vapr))].sort((a, b) => a - b);
+  let stump = { vapr: 0, errors: Infinity };
+  for (const v of candidates) {
+    const errors = points.filter((p) => p.inflow !== p.vapr > v).length;
+    if (errors < stump.errors) stump = { vapr: v, errors };
+  }
+  return {
+    points,
+    nInflow: inflows.length,
+    minInflowVapr: inflows.length ? Math.min(...inflows.map((p) => p.vapr)) : NaN,
+    maxQuietVapr: quiets.length ? Math.max(...quiets.map((p) => p.vapr)) : NaN,
+    stump,
+    // With fewer than 3 observed inflows the order statistics are anecdotes
+    sufficient: inflows.length >= 3 && quiets.length >= 3,
+  };
+}
+
 // -- Main --
 
 async function main() {
@@ -202,9 +357,14 @@ async function main() {
   // Minter.weekly() reaches gauges on Aerodrome (the veAERO rebase and team
   // allocation are carved out of it), so the gauge total must be measured, not
   // derived from weekly().
-  async function scanPools(): Promise<{ pool: any; gaugesWeeklyAero: number }> {
+  async function scanPools(): Promise<{
+    pool: any;
+    gaugesWeeklyAero: number;
+    gauges: RawGauge[];
+  }> {
     let pool: any;
     let totalRate = 0;
+    const gauges: RawGauge[] = [];
     for (let offset = 0; ; offset += PAGE) {
       const page = (await read({
         address: LP_SUGAR,
@@ -214,12 +374,26 @@ async function main() {
       })) as any[];
       for (const p of page) {
         if (p.gauge_alive) totalRate += Number(p.emissions) / 1e18;
+        // Same pages feed the cross-sectional vAPR distribution: every live
+        // gauge that is actually streaming emissions is a farming venue.
+        if (p.gauge_alive && Number(p.emissions) > 0) {
+          gauges.push({
+            lp: (p.lp as string).toLowerCase(),
+            symbol: p.symbol,
+            type: Number(p.type),
+            token0: (p.token0 as string).toLowerCase(),
+            token1: (p.token1 as string).toLowerCase(),
+            staked0: p.staked0 as bigint,
+            staked1: p.staked1 as bigint,
+            emissionsPerSec: Number(p.emissions) / 1e18,
+          });
+        }
         if (p.lp.toLowerCase() === POOL.toLowerCase()) pool = p;
       }
       if (page.length < PAGE) break;
     }
     if (!pool) throw new Error(`Pool ${POOL} not found in LpSugar.all()`);
-    return { pool, gaugesWeeklyAero: totalRate * WEEK };
+    return { pool, gaugesWeeklyAero: totalRate * WEEK, gauges };
   }
 
   const [weeklyRaw, totalWeightRaw, poolWeightRaw, scan] = await Promise.all([
@@ -267,6 +441,118 @@ async function main() {
   const poolTvlUsd = reserve0 * price0.price + reserve1 * price1.price;
   const stakedTvlUsd = staked0 * price0.price + staked1 * price1.price;
   const gaugeRateAeroPerSec = Number(pool.emissions as bigint) / 1e18;
+
+  // 3b. Cross-sectional hurdle: emissions-vAPR of every live gauge, weighted
+  // by staked TVL. Mercenary capital equalizes returns at the margin, so where
+  // the bulk of staked dollars sits is the market hurdle rate it farms at.
+  console.log(`Pricing ${scan.gauges.length} live gauges for the market hurdle…`);
+  const decimalsMap = new Map<string, number>();
+  for (const [addr, meta] of tokenMap) decimalsMap.set(addr, meta.decimals);
+  for (let offset = 0; ; offset += PAGE) {
+    const page = (await read({
+      address: LP_SUGAR,
+      abi: lpSugarAbi,
+      functionName: "tokens",
+      args: [BigInt(PAGE), BigInt(offset), ZERO, []],
+    })) as any[];
+    for (const t of page)
+      decimalsMap.set((t.token_address as string).toLowerCase(), t.decimals);
+    if (page.length < PAGE) break;
+  }
+  const gaugeTokens = [
+    ...new Set(scan.gauges.flatMap((g) => [g.token0, g.token1])),
+  ].filter((a) => decimalsMap.has(a));
+  const spotPrices = await batchSpotPrices(gaugeTokens, alchemyKey, priceCache);
+
+  const gaugeStats: GaugeStat[] = [];
+  let unpricedGauges = 0;
+  for (const g of scan.gauges) {
+    const d0 = decimalsMap.get(g.token0);
+    const d1 = decimalsMap.get(g.token1);
+    const p0 = spotPrices.get(g.token0);
+    const p1 = spotPrices.get(g.token1);
+    if (d0 === undefined || d1 === undefined || p0 === undefined || p1 === undefined) {
+      unpricedGauges++;
+      continue;
+    }
+    const staked =
+      (Number(g.staked0) / 10 ** d0) * p0 + (Number(g.staked1) / 10 ** d1) * p1;
+    if (staked <= 0) continue;
+    gaugeStats.push({
+      lp: g.lp,
+      symbol: g.symbol,
+      type: g.type,
+      stakedTvlUsd: staked,
+      vapr:
+        ((g.emissionsPerSec * WEEK * EPOCHS_PER_YEAR * aeroPrice.price) / staked) * 100,
+    });
+  }
+  const eligible = gaugeStats.filter(
+    (s) => s.stakedTvlUsd >= HURDLE_TVL_FLOOR && s.lp !== POOL.toLowerCase()
+  );
+  const setStats = (set: GaugeStat[]) => ({
+    n: set.length,
+    tvl: set.reduce((s, x) => s + x.stakedTvlUsd, 0),
+    p25: weightedPercentile(set, 0.25),
+    p50: weightedPercentile(set, 0.5),
+    p75: weightedPercentile(set, 0.75),
+  });
+  const ammSet = eligible.filter((s) => s.type <= 0); // volatile + stable AMMs, like ours
+  const clSet = eligible.filter((s) => s.type > 0);
+  const bucketEdges = [0, 10, 20, 40, 80, Infinity];
+  const buckets = bucketEdges.slice(0, -1).map((lo, i) => {
+    const hi = bucketEdges[i + 1];
+    const inBucket = ammSet.filter((s) => s.vapr >= lo && s.vapr < hi);
+    const tvl = inBucket.reduce((s, x) => s + x.stakedTvlUsd, 0);
+    return {
+      label: isFinite(hi) ? `${lo}–${hi}%` : `${lo}%+`,
+      count: inBucket.length,
+      tvlSharePct: 0, // filled below once the AMM total is known
+      tvl,
+    };
+  });
+  const ammTvl = ammSet.reduce((s, x) => s + x.stakedTvlUsd, 0);
+  for (const b of buckets) b.tvlSharePct = ammTvl > 0 ? (b.tvl / ammTvl) * 100 : 0;
+  const crossSection = {
+    nGauges: scan.gauges.length,
+    nPriced: gaugeStats.length,
+    unpricedGauges,
+    tvlFloor: HURDLE_TVL_FLOOR,
+    amm: setStats(ammSet),
+    cl: setStats(clSet),
+    all: setStats(eligible),
+    buckets: buckets.map(({ tvl, ...b }) => b),
+  };
+  console.log(
+    `  priced ${gaugeStats.length}/${scan.gauges.length} live gauges (${unpricedGauges} unpriced); ` +
+      `AMM hurdle p25/p50/p75 = ${crossSection.amm.p25.toFixed(1)}/${crossSection.amm.p50.toFixed(
+        1
+      )}/${crossSection.amm.p75.toFixed(1)}% across ${ammSet.length} gauges ($${fmt(ammTvl)})`
+  );
+
+  // 3c. Historical evidence: at which displayed vAPR did external LP actually
+  // arrive in our own gauge? (pool-history.csv is maintained by `npm run history`.)
+  const poolHist = loadPoolHistory();
+  const historical = inferHistoricalCeiling(poolHist);
+  if (historical.points.length > 0) {
+    console.log(
+      `  history: ${historical.points.length} epochs, ${historical.nInflow} inflows; ` +
+        `min inflow vAPR ${historical.minInflowVapr.toFixed(1)}%, ` +
+        `stump ${historical.stump.vapr.toFixed(1)}% (${historical.stump.errors} errors), ` +
+        `max quiet ${historical.maxQuietVapr.toFixed(1)}%`
+    );
+  } else {
+    console.warn("  no pool-history.csv — run `npm run history` for the historical ceiling");
+  }
+
+  // Deterrence default: the strictest defensible ceiling both methods support.
+  const ceilingCandidates = [
+    crossSection.amm.p25,
+    historical.sufficient ? historical.minInflowVapr : NaN,
+  ].filter((v) => isFinite(v));
+  const inferredCeiling = ceilingCandidates.length
+    ? Math.min(50, Math.max(5, Math.round(Math.min(...ceilingCandidates))))
+    : 20;
 
   // 4. Baseline from votes.csv (refreshed by `npm run fetch` right before this script in CI)
   const lines = readFileSync("votes.csv", "utf-8").trimEnd().split("\n");
@@ -379,6 +665,19 @@ async function main() {
       token1: price1.price,
       dates: { aero: aeroPrice.date, token0: price0.date, token1: price1.date },
     },
+    hurdle: {
+      inferredCeiling,
+      crossSection,
+      historical: {
+        nEpochs: historical.points.length,
+        nInflow: historical.nInflow,
+        minInflowVapr: historical.minInflowVapr,
+        maxQuietVapr: historical.maxQuietVapr,
+        stump: historical.stump,
+        sufficient: historical.sufficient,
+        points: historical.points,
+      },
+    },
   };
 
   console.log(JSON.stringify(snapshot, null, 2));
@@ -389,6 +688,13 @@ async function main() {
   );
 
   // 6. Build strategy.html
+  const pf = (v: number) => (isFinite(v) ? v.toFixed(1) + "%" : "–");
+  const csRow = (
+    name: string,
+    s: { n: number; tvl: number; p25: number; p50: number; p75: number }
+  ) =>
+    `<tr><td>${name}</td><td class="right">${s.n}</td><td class="right">${usdFmt(s.tvl)}</td>` +
+    `<td class="right">${pf(s.p25)}</td><td class="right">${pf(s.p50)}</td><td class="right">${pf(s.p75)}</td></tr>`;
   const defaultAllocationPct =
     voterPower > 0
       ? Math.round((voterVotesOnPool / voterPower) * 1000) / 10
@@ -493,9 +799,17 @@ async function main() {
       <input type="number" id="cap-kvcm" min="0" step="1000" value="50000">
     </label>
     <label>Target vAPR ceiling (%)
-      <input type="number" id="target-vapr" min="0.1" step="1" value="20">
+      <input type="number" id="target-vapr" min="0.1" step="1" value="${inferredCeiling}">
     </label>
   </div>
+  <p class="muted">Target vAPR ceiling default of ${inferredCeiling}% is inferred from mercenary behavior
+  (see <a href="#inferred-ceiling">Inferred vAPR ceiling</a>): market hurdle p25 = ${
+    isFinite(crossSection.amm.p25) ? crossSection.amm.p25.toFixed(1) + "%" : "n/a"
+  } across ${crossSection.amm.n} comparable AMM gauges${
+    historical.sufficient
+      ? `; external LP historically arrived in our gauge above ${historical.minInflowVapr.toFixed(1)}%`
+      : ""
+  }. Edit freely — it only drives the deterrence rows.</p>
 
   <div class="scroll"><table id="emissions-table">
     <thead><tr><th></th><th class="right">Value</th></tr></thead>
@@ -536,6 +850,82 @@ async function main() {
       <tr class="total"><td>Additional TVL to add before flip</td><td class="right big" id="det-add"></td></tr>
     </tbody>
   </table></div>
+
+  <h2 id="inferred-ceiling">Inferred vAPR ceiling</h2>
+  <p class="intro">Two independent estimates of the vAPR level at which mercenary capital shows up,
+  used to default the target ceiling above.
+  <strong>Cross-sectional:</strong> mercenary capital equalizes returns at the margin, so the
+  staked-TVL-weighted distribution of emissions-vAPR across all live gauges reveals the market
+  hurdle rate it farms at — staying below the p25 keeps our pool less attractive than what ~75%
+  of already-deployed capital accepts elsewhere.
+  <strong>Historical:</strong> our own gauge's record (<code>pool-history.csv</code>, one snapshot
+  per epoch flip) shows the displayed vAPR levels at which external LP actually arrived —
+  external means everything not staked by the voter address.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>Cross-section (today)</th><th class="right">Gauges</th><th class="right">Staked TVL</th>
+      <th class="right">p25</th><th class="right">p50</th><th class="right">p75</th></tr></thead>
+    <tbody>
+      ${csRow("Comparable AMM (volatile + stable)", crossSection.amm)}
+      ${csRow("Concentrated liquidity", crossSection.cl)}
+      ${csRow("All pool types", crossSection.all)}
+    </tbody>
+  </table></div>
+  <p class="muted">TVL-weighted percentiles over live gauges with ≥ ${usdFmt(
+    HURDLE_TVL_FLOOR
+  )} staked, our pool excluded; ${crossSection.nPriced} of ${
+    crossSection.nGauges
+  } emitting gauges priced (${crossSection.unpricedGauges} skipped for missing token prices).
+  CL gauges shown for context only — their displayed vAPR is not comparable to a vAMM's.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>Displayed vAPR</th><th class="right">AMM gauges</th><th class="right">Share of staked TVL</th></tr></thead>
+    <tbody>
+      ${crossSection.buckets
+        .map(
+          (b) =>
+            `<tr><td>${b.label}</td><td class="right">${b.count}</td><td class="right">${b.tvlSharePct.toFixed(1)}%</td></tr>`
+        )
+        .join("\n      ")}
+    </tbody>
+  </table></div>
+
+  ${
+    historical.points.length > 0
+      ? `<p class="intro" style="margin-top:1rem">Historical evidence: of ${historical.points.length} past epochs,
+  <strong>${historical.nInflow}</strong> saw external LP inflow. External capital arrived at displayed vAPRs down to
+  <strong>${pf(historical.minInflowVapr)}</strong> (best single split: inflow iff vAPR &gt; ${pf(
+          historical.stump.vapr
+        )}, ${historical.stump.errors} of ${historical.points.length} epochs misclassified); the quietest weeks ran as high as ${pf(
+          historical.maxQuietVapr
+        )} without attracting anyone.${
+          historical.sufficient
+            ? ""
+            : " Too few observations on one side — treated as insufficient evidence for the default above."
+        }</p>
+  <div class="scroll"><table>
+    <thead><tr><th class="right">Epoch</th><th>Flip</th><th class="right">Staked TVL</th>
+      <th class="right">Displayed vAPR</th><th class="right">Δ external LP</th><th>Result</th></tr></thead>
+    <tbody>
+      ${historical.points
+        .map(
+          (p) =>
+            `<tr><td class="right">${p.epoch}</td><td>${p.date}</td><td class="right">${usdFmt(
+              p.stakedTvlUsd
+            )}</td><td class="right">${pf(p.vapr)}</td><td class="right">${
+              (p.dExtPct >= 0 ? "+" : "") + p.dExtPct.toFixed(1)
+            }%</td><td>${
+              p.inflow ? '<span class="delta-neg">inflow</span>' : '<span class="muted">quiet</span>'
+            }</td></tr>`
+        )
+        .join("\n      ")}
+    </tbody>
+  </table></div>
+  <p class="muted">Δ external LP is the change in non-voter gauge liquidity over the epoch, in LP units
+  (price-independent), relative to gauge supply at the flip. Inflow = growth beyond
+  max(${INFLOW_REL * 100}% of gauge supply, ${INFLOW_ABS * 100}% of pool supply).</p>`
+      : `<p class="muted">No pool history yet — run <code>npm run history</code> to build pool-history.csv.</p>`
+  }
 
   <h2>Allocation ladder</h2>
   <div class="scroll"><table id="ladder-table">
@@ -578,6 +968,15 @@ async function main() {
     t0.symbol
   )} or for AERO sell pressure from farming.</li>
     <li>LP deposits into a vAMM pool must be balanced 50/50 by value at deposit time; the two capital inputs are summed into one position.</li>
+    <li>Cross-sectional hurdle: emissions-vAPR = gauge streaming rate × 52.14 weeks × AERO price ÷ staked TVL,
+    over live gauges streaming emissions; tokens priced via Alchemy spot with prices.csv fallback, gauges with
+    unpriceable tokens skipped. Pool "type" from LpSugar (≤ 0 = basic AMM, &gt; 0 = CL).</li>
+    <li>Historical ceiling: pool-history.csv snapshots gauge state 1h after each epoch flip via archive calls;
+    the AERO rate per epoch comes from the gauge's own rewardRateByEpoch record. Our TVL is defined as the
+    gauge balance of the voter address only — LP staked by any other address counts as external, including
+    addresses we might control that are not the voter.</li>
+    <li>The inferred ceiling defaults to the stricter of (cross-sectional p25, lowest vAPR that ever drew
+    external inflow), rounded and clamped to 5–50%; it is a starting point, not a hard rule.</li>
   </div>
 
   <script>
