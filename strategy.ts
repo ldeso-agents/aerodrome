@@ -1008,6 +1008,8 @@ async function main() {
       <span class="hint">positions this size and up are kept out with TVL (deterrence tables below);
       smaller ones are priced as the background leak instead — changing this auto-fills the
       background from the historical curve</span>
+      <span class="hint">optimum for this scenario: <a href="#" id="fstar-apply">…</a> — the smallest
+      size the scenario's staked TVL already deters (higher only adds leak, lower needs more TVL)</span>
     </label>
     <label>Farmer patience (weeks)
       <input type="number" id="ref-patience" min="1" step="1" value="${REF_PATIENCE_WEEKS}">
@@ -1254,7 +1256,10 @@ async function main() {
     auto-fills the background by interpolating this curve; a future kVCM narrative could exceed it, so
     it stays editable. The leak row reduces our capture to our stake ÷ (our stake + background); the
     background is floored at the external stake currently present, so setting it to zero recovers the
-    old static model.</li>
+    old static model. The threshold hint also shows the scenario's optimum — the smallest size the
+    configured staked TVL already deters, from inverting the deterrence condition at S = staked after
+    deposit: raising the threshold past it only adds leak, lowering it demands TVL the scenario hasn't
+    posted.</li>
     <li>Incumbent staked TVL is assumed static; in practice mercenary TVL chases displayed vAPR — that response is exactly what the deterrence calculator is for.</li>
     <li>Break-even holding assumes the farmer buys the ${escapeHtml(
       t0.symbol
@@ -1439,6 +1444,21 @@ async function main() {
       var annualUsd = s.weeklyUsd * EPOCHS_PER_YEAR;
       var tvlReq = deterTvl(annualUsd);
       var extra = Math.max(0, tvlReq - s.stakedAfter);
+
+      // Optimal threshold given the scenario's stakes: the smallest farmer the
+      // staked TVL already deters — any higher threshold only adds leak, any
+      // lower one needs TVL that isn't posted. Inverts the deterrence
+      // condition annual = h·S + (52.14·F/H)·S/(S+U) for F at S = stakedAfter.
+      var hFrac = hurdle / 100;
+      var fStar = 0;
+      if (refH > 0 && s.stakedAfter > 0 && annualUsd > hFrac * s.stakedAfter) {
+        var cNeed = (annualUsd - hFrac * s.stakedAfter) * (s.stakedAfter + unstaked) / s.stakedAfter;
+        fStar = Math.round(cNeed * refH / EPOCHS_PER_YEAR / 100) * 100;
+      }
+      var fStarEl = el('fstar-apply');
+      fStarEl.textContent = fStar > 0 ? fmtU(fStar) : 'none — vAPR already below the hurdle';
+      fStarEl.dataset.fstar = fStar;
+
       el('det-vapr').textContent = s.vApr.toFixed(1) + '%';
       el('det-req').textContent = !isFinite(tvlReq) ? '–'
         : tvlReq === 0 ? 'none — friction alone deters' : fmtU(tvlReq);
@@ -1527,6 +1547,13 @@ async function main() {
     }
     el('ref-farmer').addEventListener('input', function() {
       el('small-bg').value = Math.round(bgForThreshold(parseFloat(el('ref-farmer').value) || 0));
+    });
+    el('fstar-apply').addEventListener('click', function(e) {
+      e.preventDefault();
+      var f = parseFloat(el('fstar-apply').dataset.fstar) || 0;
+      if (f <= 0) return;
+      el('ref-farmer').value = f;
+      el('ref-farmer').dispatchEvent(new Event('input')); // auto-fills the background, recalcs
     });
     ['hurdle', 'ref-farmer', 'ref-patience', 'small-bg'].forEach(function(id) {
       el(id).addEventListener('input', recalc);
