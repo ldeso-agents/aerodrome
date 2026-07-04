@@ -54,6 +54,26 @@ const INFLOW_ABS = 0.005; // of pool supply
 // pro-rata bite is negligible and round-trip impact can't deter anyway.
 const REF_FARMER_USD = 10_000;
 const REF_PATIENCE_WEEKS = 8;
+// Farmers below REF_FARMER_USD are priced rather than deterred: their
+// aggregate stake is bounded by the supply of small capital hunting this
+// gauge, not by yield indifference. The curve below is the peak concurrent
+// stake ever observed from farmers under each size — measured from the
+// gauge's full per-address LP-transfer history (Blockscout, 2026-07-04,
+// entry-valued, launch week excluded; peaks fell in the high-emission era of
+// January 2026). The background input auto-fills from it when the threshold
+// changes.
+const SMALL_FARMER_BG_CURVE: [number, number][] = [
+  [2_000, 13_000],
+  [5_000, 33_000],
+  [10_000, 48_000],
+  [15_000, 84_000],
+  [20_000, 102_000],
+  [25_000, 120_000],
+  [50_000, 148_000],
+  [100_000, 323_000],
+];
+// Curve value at the default threshold (REF_FARMER_USD).
+const SMALL_FARMER_BG_USD = 48_000;
 // Historical inflows at least this large (Δ external LP, % of gauge supply)
 // count as "sized" — evidence that capital of consequence arrived.
 const SIZED_INFLOW_PCT = 20;
@@ -191,6 +211,42 @@ function loadLatestCachedPrices(): Map<string, { date: string; price: number }> 
   return latest;
 }
 
+/** prices.csv as token -> (date -> usd), skipping the -1 "unpriceable" sentinels. */
+function loadPricesCsvFull(): Map<string, Map<string, number>> {
+  const prices = new Map<string, Map<string, number>>();
+  if (!existsSync("prices.csv")) return prices;
+  const lines = readFileSync("prices.csv", "utf-8").trimEnd().split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    const [date, token, , priceStr] = lines[i].split(",");
+    const price = parseFloat(priceStr);
+    if (!date || !token || isNaN(price) || price < 0) continue;
+    let dateMap = prices.get(token);
+    if (!dateMap) prices.set(token, (dateMap = new Map()));
+    dateMap.set(date, price);
+  }
+  return prices;
+}
+
+/** Price of a token on a date: exact match, else nearest within ±7 days. */
+function priceOn(
+  prices: Map<string, Map<string, number>>,
+  token: string,
+  date: string
+): number | undefined {
+  const dateMap = prices.get(token);
+  if (!dateMap) return undefined;
+  const exact = dateMap.get(date);
+  if (exact !== undefined) return exact;
+  const targetMs = Date.parse(date + "T00:00:00Z");
+  let best: { dist: number; price: number } | undefined;
+  for (const [d, p] of dateMap) {
+    const dist = Math.abs(Date.parse(d + "T00:00:00Z") - targetMs);
+    if (dist <= 7 * 24 * 3600 * 1000 && (!best || dist < best.dist))
+      best = { dist, price: p };
+  }
+  return best?.price;
+}
+
 /** Current USD price of a token: latest daily point from Alchemy, else prices.csv cache. */
 async function currentPriceUsd(
   addr: string,
@@ -306,6 +362,8 @@ type HistPoint = {
   vapr: number;
   dExtPct: number; // external LP change over the epoch, % of gauge supply
   inflow: boolean;
+  sticky: boolean; // arrived but never left ≥ REF_PATIENCE_WEEKS — passive, not mercenary
+  launch: boolean; // the gauge's first epoch — flows driven by the token launch, not vAPR
 };
 
 /** Classify each historical epoch as external-inflow vs quiet (LP units, so
@@ -314,12 +372,24 @@ type HistPoint = {
 function inferHistoricalCeiling(hist: HistRow[]) {
   const ok = hist.filter((r) => r.status === "ok" && r.stakedTvlUsd > 0);
   const points: HistPoint[] = [];
+  const lastEpoch = ok.length ? ok[ok.length - 1].epoch : 0;
   for (let i = 0; i + 1 < ok.length; i++) {
     const cur = ok[i];
     const next = ok[i + 1];
     if (next.epoch !== cur.epoch + 1) continue;
     const dExt = next.externalLp - cur.externalLp;
-    const inflow = dExt > Math.max(INFLOW_REL * cur.gaugeLp, INFLOW_ABS * cur.poolLp);
+    let inflow = dExt > Math.max(INFLOW_REL * cur.gaugeLp, INFLOW_ABS * cur.poolLp);
+    // An inflow that was never substantially withdrawn and has now been staked
+    // at least the reference patience is passive capital parking, not a
+    // yield-rotating farmer — it doesn't evidence a mercenary vAPR threshold.
+    let sticky = false;
+    if (inflow && lastEpoch - cur.epoch >= REF_PATIENCE_WEEKS) {
+      const minFutureExt = Math.min(...ok.slice(i + 1).map((r) => r.externalLp));
+      if (minFutureExt > cur.externalLp + 0.5 * dExt) {
+        sticky = true;
+        inflow = false;
+      }
+    }
     points.push({
       epoch: cur.epoch,
       date: cur.date,
@@ -327,23 +397,30 @@ function inferHistoricalCeiling(hist: HistRow[]) {
       vapr: cur.vapr,
       dExtPct: cur.gaugeLp > 0 ? (dExt / cur.gaugeLp) * 100 : 0,
       inflow,
+      sticky,
+      // The first epoch's flows were driven by the token launch, not by the
+      // displayed vAPR — shown in the table but excluded from the evidence.
+      launch: cur.epoch === ok[0].epoch,
     });
   }
-  const inflows = points.filter((p) => p.inflow);
-  const quiets = points.filter((p) => !p.inflow);
+  const evidence = points.filter((p) => !p.launch);
+  const inflows = evidence.filter((p) => p.inflow);
+  const quiets = evidence.filter((p) => !p.inflow && !p.sticky); // sticky ≠ quiet: passive capital did arrive
   // Sized inflows: big enough that friction was overcome by capital that
   // takes a meaningful emissions share — these calibrate the ceiling cap.
   const sized = inflows.filter((p) => p.dExtPct >= SIZED_INFLOW_PCT);
   // Decision stump: cutoff minimizing misclassifications of "inflow iff vAPR > v"
-  const candidates = [0, ...new Set(points.map((p) => p.vapr))].sort((a, b) => a - b);
+  const candidates = [0, ...new Set(evidence.map((p) => p.vapr))].sort((a, b) => a - b);
   let stump = { vapr: 0, errors: Infinity };
   for (const v of candidates) {
-    const errors = points.filter((p) => p.inflow !== p.vapr > v).length;
+    const errors = evidence.filter((p) => p.inflow !== p.vapr > v).length;
     if (errors < stump.errors) stump = { vapr: v, errors };
   }
   return {
     points,
+    nEvidence: evidence.length,
     nInflow: inflows.length,
+    nSticky: evidence.filter((p) => p.sticky).length,
     minInflowVapr: inflows.length ? Math.min(...inflows.map((p) => p.vapr)) : NaN,
     nSizedInflow: sized.length,
     minSizedInflowVapr: sized.length ? Math.min(...sized.map((p) => p.vapr)) : NaN,
@@ -512,15 +589,35 @@ async function main() {
   const gaugeTokens = [
     ...new Set(scan.gauges.flatMap((g) => [g.token0, g.token1])),
   ].filter((a) => decimalsMap.has(a));
-  const spotPrices = await batchSpotPrices(gaugeTokens, alchemyKey, priceCache);
+  // Value gauges at the latest epoch flip using the committed prices.csv, so
+  // the hurdle is reproducible run to run and only moves when an epoch closes
+  // (gauge rates only change at flips anyway). Live Alchemy spot is just the
+  // fallback for tokens outside the tracked-pool universe prices.csv covers.
+  const nowTs = Math.floor(Date.now() / 1000);
+  const flipDate = new Date((nowTs - (nowTs % WEEK)) * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const epochPrices = loadPricesCsvFull();
+  const tokenPrice = new Map<string, number>();
+  const missingTokens: string[] = [];
+  for (const t of gaugeTokens) {
+    const p = priceOn(epochPrices, t, flipDate);
+    if (p !== undefined) tokenPrice.set(t, p);
+    else missingTokens.push(t);
+  }
+  const spotFallback = await batchSpotPrices(missingTokens, alchemyKey, priceCache);
+  for (const [t, p] of spotFallback) tokenPrice.set(t, p);
+  const aeroEpochUsd = priceOn(epochPrices, AERO, flipDate) ?? aeroPrice.price;
 
   const gaugeStats: GaugeStat[] = [];
   let unpricedGauges = 0;
+  let fallbackGauges = 0;
+  let fallbackTvl = 0;
   for (const g of scan.gauges) {
     const d0 = decimalsMap.get(g.token0);
     const d1 = decimalsMap.get(g.token1);
-    const p0 = spotPrices.get(g.token0);
-    const p1 = spotPrices.get(g.token1);
+    const p0 = tokenPrice.get(g.token0);
+    const p1 = tokenPrice.get(g.token1);
     if (d0 === undefined || d1 === undefined || p0 === undefined || p1 === undefined) {
       unpricedGauges++;
       continue;
@@ -528,13 +625,17 @@ async function main() {
     const staked =
       (Number(g.staked0) / 10 ** d0) * p0 + (Number(g.staked1) / 10 ** d1) * p1;
     if (staked <= 0) continue;
+    if (spotFallback.has(g.token0) || spotFallback.has(g.token1)) {
+      fallbackGauges++;
+      fallbackTvl += staked;
+    }
     gaugeStats.push({
       lp: g.lp,
       symbol: g.symbol,
       type: g.type,
       stakedTvlUsd: staked,
       vapr:
-        ((g.emissionsPerSec * WEEK * EPOCHS_PER_YEAR * aeroPrice.price) / staked) * 100,
+        ((g.emissionsPerSec * WEEK * EPOCHS_PER_YEAR * aeroEpochUsd) / staked) * 100,
     });
   }
   const eligible = gaugeStats.filter(
@@ -563,10 +664,14 @@ async function main() {
   });
   const ammTvl = ammSet.reduce((s, x) => s + x.stakedTvlUsd, 0);
   for (const b of buckets) b.tvlSharePct = ammTvl > 0 ? (b.tvl / ammTvl) * 100 : 0;
+  const pricedTvl = gaugeStats.reduce((s, x) => s + x.stakedTvlUsd, 0);
   const crossSection = {
     nGauges: scan.gauges.length,
     nPriced: gaugeStats.length,
     unpricedGauges,
+    pricedAtDate: flipDate,
+    fallbackGauges,
+    fallbackTvlSharePct: pricedTvl > 0 ? (fallbackTvl / pricedTvl) * 100 : 0,
     tvlFloor: HURDLE_TVL_FLOOR,
     amm: setStats(ammSet),
     cl: setStats(clSet),
@@ -574,7 +679,10 @@ async function main() {
     buckets: buckets.map(({ tvl, ...b }) => b),
   };
   console.log(
-    `  priced ${gaugeStats.length}/${scan.gauges.length} live gauges (${unpricedGauges} unpriced); ` +
+    `  priced ${gaugeStats.length}/${scan.gauges.length} live gauges at ${flipDate} epoch prices ` +
+      `(${fallbackGauges} via live-spot fallback = ${crossSection.fallbackTvlSharePct.toFixed(
+        1
+      )}% of priced TVL, ${unpricedGauges} unpriced); ` +
       `AMM hurdle p25/p50/p75 = ${crossSection.amm.p25.toFixed(1)}/${crossSection.amm.p50.toFixed(
         1
       )}/${crossSection.amm.p75.toFixed(1)}% across ${ammSet.length} gauges ($${fmt(ammTvl)})`
@@ -740,10 +848,13 @@ async function main() {
       defaultHurdlePct,
       frictionAllowanceUsd,
       refFarmer: { usd: REF_FARMER_USD, patienceWeeks: REF_PATIENCE_WEEKS },
+      smallFarmerBgUsd: SMALL_FARMER_BG_USD,
+      bgCurve: SMALL_FARMER_BG_CURVE,
       crossSection,
       historical: {
         nEpochs: historical.points.length,
         nInflow: historical.nInflow,
+        nSticky: historical.nSticky,
         minInflowVapr: historical.minInflowVapr,
         nSizedInflow: historical.nSizedInflow,
         minSizedInflowVapr: historical.minSizedInflowVapr,
@@ -874,6 +985,8 @@ async function main() {
         <input type="range" id="alloc-slider" min="0" max="100" step="0.5" value="${defaultAllocationPct}">
         <input type="number" id="alloc" min="0" max="100" step="0.5" value="${defaultAllocationPct}">%
       </span>
+      <span class="hint">share of our ${fmt(voterPower)} votes pointed at our own pool; the rest
+      stays spread across the proportional strategy's pools</span>
     </label>
     <label>Additional capital to deposit ($)
       <span class="slider-row">
@@ -881,26 +994,44 @@ async function main() {
         <input type="number" id="cap" min="0" step="1000" value="${DEFAULT_DEPOSIT_USD}">
       </span>
       <span class="muted" id="cap-split"></span>
+      <span class="hint">new LP staked on top of our existing ${usdFmt(
+        ourStakedUsd
+      )} — a vAMM deposit is forced 50/50 by value, so the split above is not a choice</span>
     </label>
     <label>Market hurdle rate (%)
       <input type="number" id="hurdle" min="0.1" step="0.5" value="${defaultHurdlePct}">
       <span class="hint">the yield mercenary capital already earns in other gauges (its opportunity
-      cost) — a farmer only moves here if our vAPR beats this plus their round-trip costs</span>
+      cost); default = TVL-weighted p25 across comparable AMM gauges</span>
     </label>
     <label>Smallest farmer to deter ($)
       <input type="number" id="ref-farmer" min="1000" step="1000" value="${REF_FARMER_USD}">
+      <span class="hint">positions this size and up are kept out with TVL (deterrence tables below);
+      smaller ones are priced as the background leak instead — changing this auto-fills the
+      background from the historical curve</span>
+      <span class="hint">optimum for this scenario: <a href="#" id="fstar-apply">…</a> — the smallest
+      size the scenario's staked TVL already deters (higher only adds leak, lower needs more TVL)</span>
     </label>
     <label>Farmer patience (weeks)
       <input type="number" id="ref-patience" min="1" step="1" value="${REF_PATIENCE_WEEKS}">
+      <span class="hint">how long a farmer will wait for emissions to repay their round-trip cost
+      before rotating elsewhere</span>
+    </label>
+    <label>Small-farmer background ($)
+      <input type="number" id="small-bg" min="0" step="1000" value="${SMALL_FARMER_BG_USD}">
+      <span class="hint">aggregate stake expected from farmers below the deterrence threshold.
+      Auto-fills from <em>measured history</em> — the most sub-threshold capital ever staked at once
+      (launch week excluded; see assumptions for the full curve) — and can be overridden freely</span>
     </label>
   </div>
   <p class="muted">Market hurdle default of ${defaultHurdlePct}% is the TVL-weighted p25 emissions-vAPR
   across ${crossSection.amm.n} comparable AMM gauges (see <a href="#inferred-ceiling">Inferred vAPR
-  ceiling</a>) — what mercenary capital earns elsewhere. Friction is handled separately: a
+  ceiling</a>). Friction is handled separately: a
   <span class="ref-f-usd">${usdFmt(REF_FARMER_USD)}</span> farmer with
   <span class="ref-h-wk">${REF_PATIENCE_WEEKS}</span>-week patience forgoes ≈
   <span class="allow-usd">${usdFmt(frictionAllowanceUsd)}</span>/yr of emissions to round-trip price
-  impact, so that slice needs almost no TVL backing. The three inputs above drive the deterrence rows.</p>
+  impact, so that slice needs almost no TVL backing. Farmers below the threshold are not deterred at
+  all — their supply-bounded background dilutes our capture and is priced as the leak row in the
+  income table.</p>
 
   <div class="scroll"><table id="emissions-table">
     <thead><tr><th></th><th class="right">Value</th></tr></thead>
@@ -914,22 +1045,27 @@ async function main() {
 
   <h2>Weekly income: proportional strategy vs own-pool farming</h2>
   <div class="scroll"><table id="compare-table">
-    <thead><tr><th>Income source</th><th class="right">Proportional</th><th class="right">Own-pool scenario</th></tr></thead>
+    <thead><tr><th>Income source</th><th class="right">Proportional</th><th class="right">Own-pool (deterred)</th><th class="right">Own-pool (farmer equilibrium)</th></tr></thead>
     <tbody>
-      <tr><td>LP emissions captured (our stake share)</td><td class="right" id="cmp-lp-cur"></td><td class="right" id="cmp-lp"></td></tr>
-      <tr><td>Voting: our pool's fees+bribes</td><td class="right" id="cmp-own-cur"></td><td class="right" id="cmp-own"></td></tr>
-      <tr><td>Voting: other pools' fees+bribes</td><td class="right" id="cmp-other-cur"></td><td class="right" id="cmp-other"></td></tr>
-      <tr class="total"><td>Total per week</td><td class="right" id="cmp-total-cur"></td><td class="right" id="cmp-total"></td></tr>
-      <tr><td>Net delta vs proportional</td><td class="right">–</td><td class="right" id="cmp-delta"></td></tr>
-      <tr><td>Annualized delta</td><td class="right">–</td><td class="right" id="cmp-delta-year"></td></tr>
+      <tr><td>LP emissions captured (our stake share)</td><td class="right" id="cmp-lp-cur"></td><td class="right" id="cmp-lp"></td><td class="right" id="cmp-lp-eq"></td></tr>
+      <tr><td>Small-farmer dilution (background ≤ threshold)</td><td class="right" id="cmp-leak-cur"></td><td class="right" id="cmp-leak"></td><td class="right" id="cmp-leak-eq"></td></tr>
+      <tr><td>Voting: our pool's fees+bribes</td><td class="right" id="cmp-own-cur"></td><td class="right" id="cmp-own"></td><td class="right" id="cmp-own-eq"></td></tr>
+      <tr><td>Voting: other pools' fees+bribes</td><td class="right" id="cmp-other-cur"></td><td class="right" id="cmp-other"></td><td class="right" id="cmp-other-eq"></td></tr>
+      <tr class="total"><td>Total per week</td><td class="right" id="cmp-total-cur"></td><td class="right" id="cmp-total"></td><td class="right" id="cmp-total-eq"></td></tr>
+      <tr><td>Net delta vs proportional</td><td class="right">–</td><td class="right" id="cmp-delta"></td><td class="right" id="cmp-delta-eq"></td></tr>
+      <tr><td>Annualized delta</td><td class="right">–</td><td class="right" id="cmp-delta-year"></td><td class="right" id="cmp-delta-year-eq"></td></tr>
     </tbody>
   </table></div>
   <p class="muted">Proportional column is the baseline strategy — our power split across the top-5
   bluechip/stable pools by fees+bribes — for epoch ${latestEpoch} (trailing ${TRAILING_EPOCHS}-epoch average: ${usdFmt(
     baselineEarningsTrailing
-  )}/wk), not the votes as currently cast. Scenario assumes existing stakes — ours (${usdFmt(
-    ourStakedUsd
-  )}) and external (${usdFmt(stakedTvlUsd - ourStakedUsd)}) — neither grow nor shrink.</p>
+  )}/wk), not the votes as currently cast. The deterred column keeps farmers at or above the threshold
+  out but carries the small-farmer background (the leak row — sub-threshold capital deterrence can never
+  remove, floored at the ${usdFmt(
+    stakedTvlUsd - ourStakedUsd
+  )} of external stake already present); the equilibrium column additionally lets threshold-sized
+  farmers pile in until the marginal one only nets the market hurdle, diluting our capture further.
+  Reality sits between the two, depending on how much deterrence TVL is actually posted.</p>
 
   <h2>Mercenary deterrence: TVL to add before the flip</h2>
   <p class="intro">A farmer enters when their pro-rata emissions beat the market hurdle <em>plus</em>
@@ -941,7 +1077,8 @@ async function main() {
   )}</span>/yr slice of emissions with almost no TVL; every emission dollar beyond it needs 1 ÷ hurdle
   dollars of staked TVL. This stays consistent as TVL grows (unlike a fixed vAPR ceiling, since the
   friction premium shrinks with depth). Historically that friction, more than the displayed vAPR,
-  is what kept capital out.</p>
+  is what kept capital out. Farmers below the threshold are not worth deterring — their supply-bounded
+  background is priced as the leak row in the income table instead.</p>
   <div class="scroll"><table id="deter-table">
     <tbody>
       <tr><td>vAPR after our deposit</td><td class="right big" id="det-vapr"></td></tr>
@@ -986,7 +1123,12 @@ async function main() {
   </table></div>
   <p class="muted">TVL-weighted percentiles over live gauges with ≥ ${usdFmt(
     HURDLE_TVL_FLOOR
-  )} staked, our pool excluded; ${crossSection.nPriced} of ${
+  )} staked, our pool excluded, valued at the ${crossSection.pricedAtDate} epoch flip from the committed
+  prices.csv so the figures are reproducible and only move when an epoch closes; ${
+    crossSection.fallbackGauges
+  } gauges needed a live-price fallback (${crossSection.fallbackTvlSharePct.toFixed(
+    1
+  )}% of priced TVL). ${crossSection.nPriced} of ${
     crossSection.nGauges
   } emitting gauges priced (${crossSection.unpricedGauges} skipped for missing token prices).
   CL gauges shown for context only — their displayed vAPR is not comparable to a vAMM's.</p>
@@ -1005,14 +1147,24 @@ async function main() {
 
   ${
     historical.points.length > 0
-      ? `<p class="intro" style="margin-top:1rem">Historical evidence: of ${historical.points.length} past epochs,
-  <strong>${historical.nInflow}</strong> saw external LP inflow, ${
+      ? `<p class="intro" style="margin-top:1rem">Historical evidence: of ${
+          historical.nEvidence
+        } past epochs (the launch epoch is shown but excluded — its flows chased the token launch, not the vAPR),
+  <strong>${historical.nInflow}</strong> saw mercenary external LP inflow, ${
           historical.nSizedInflow
-        } of them sized (≥${SIZED_INFLOW_PCT}% of gauge supply). Any capital arrived at displayed vAPRs down to
+        } of them sized (≥${SIZED_INFLOW_PCT}% of gauge supply)${
+          historical.nSticky > 0
+            ? `; ${historical.nSticky} further inflow${
+                historical.nSticky > 1 ? "s" : ""
+              } never left for ≥ ${REF_PATIENCE_WEEKS} weeks and count${
+                historical.nSticky > 1 ? "" : "s"
+              } as passive (sticky), not mercenary`
+            : ""
+        }. Mercenary capital arrived at displayed vAPRs down to
   <strong>${pf(historical.minInflowVapr)}</strong>, but capital of consequence only above
   <strong>${pf(historical.minSizedInflowVapr)}</strong> (best single split: inflow iff vAPR &gt; ${pf(
           historical.stump.vapr
-        )}, ${historical.stump.errors} of ${historical.points.length} epochs misclassified); the quietest weeks ran as high as ${pf(
+        )}, ${historical.stump.errors} of ${historical.nEvidence} epochs misclassified); the quietest weeks ran as high as ${pf(
           historical.maxQuietVapr
         )} without attracting anyone.${
           historical.sufficient
@@ -1031,7 +1183,13 @@ async function main() {
             )}</td><td class="right">${pf(p.vapr)}</td><td class="right">${
               (p.dExtPct >= 0 ? "+" : "") + p.dExtPct.toFixed(1)
             }%</td><td>${
-              p.inflow ? '<span class="delta-neg">inflow</span>' : '<span class="muted">quiet</span>'
+              p.launch
+                ? '<span class="muted">launch</span>'
+                : p.inflow
+                ? '<span class="delta-neg">inflow</span>'
+                : p.sticky
+                ? '<span class="muted">sticky</span>'
+                : '<span class="muted">quiet</span>'
             }</td></tr>`
         )
         .join("\n      ")}
@@ -1048,6 +1206,7 @@ async function main() {
     <thead><tr>
       <th class="right">Allocation</th><th class="right">AERO/week</th><th class="right">$/week to pool</th>
       <th class="right">LP income/week</th><th class="right">Total/week</th><th class="right">Δ vs proportional</th>
+      <th class="right">Δ at farmer equilibrium</th>
       <th class="right">vAPR after deposit</th><th class="right">TVL to deter</th><th class="right">Extra TVL needed</th>
     </tr></thead>
     <tbody id="ladder-body"></tbody>
@@ -1079,6 +1238,28 @@ async function main() {
     <li>The comparison baseline is the proportional strategy (power split across the top-5 bluechip/stable
     pools by fees+bribes), not the votes as currently cast; other-pool voting income in the scenario spreads
     the non-allocated votes across those same baseline pools in the same proportions.</li>
+    <li>The farmer-equilibrium column is the worst case: farmers of the reference size/patience enter until
+    the marginal one only nets the market hurdle, so staked TVL rises to the deterrence level and our LP
+    emissions capture is diluted to roughly hurdle × our stake; voting income is unaffected. The deterred
+    column is the best case (no entry); reality depends on how much deterrence TVL is posted before the flip.</li>
+    <li>Historical inflows that were never substantially withdrawn and have been staked at least
+    ${REF_PATIENCE_WEEKS} weeks are classified as sticky (passive capital parking, e.g. the small epoch-141
+    stake) and excluded from the mercenary evidence — they respond to something other than vAPR. The
+    gauge's first epoch is likewise excluded: its flows were part of the token launch.</li>
+    <li>Small-farmer background: farmers below the deterrence threshold are priced, not deterred — their
+    aggregate stake is bounded by the supply of small capital hunting this gauge, not by yield indifference.
+    The background is a <em>historical measurement</em>, not a model: from the full per-address
+    LP-transfer history (195 external stake episodes; entries during the launch week excluded as launch
+    behavior, not yield-chasing), the most capital farmers below each size ever had staked at once was
+    ${SMALL_FARMER_BG_CURVE.map(([f, b]) => `&lt;$${f / 1000}k → $${b / 1000}k`).join(" · ")}
+    (unbounded: $886k), with the peaks in the high-emission era of January 2026. Changing the threshold
+    auto-fills the background by interpolating this curve; a future kVCM narrative could exceed it, so
+    it stays editable. The leak row reduces our capture to our stake ÷ (our stake + background); the
+    background is floored at the external stake currently present, so setting it to zero recovers the
+    old static model. The threshold hint also shows the scenario's optimum — the smallest size the
+    configured staked TVL already deters, from inverting the deterrence condition at S = staked after
+    deposit: raising the threshold past it only adds leak, lowering it demands TVL the scenario hasn't
+    posted.</li>
     <li>Incumbent staked TVL is assumed static; in practice mercenary TVL chases displayed vAPR — that response is exactly what the deterrence calculator is for.</li>
     <li>Break-even holding assumes the farmer buys the ${escapeHtml(
       t0.symbol
@@ -1099,8 +1280,10 @@ async function main() {
     t1.symbol
   )} split cannot be chosen: half the deposit's value must be provided as each token (the scenario shows the implied amounts at current prices).</li>
     <li>Cross-sectional hurdle: emissions-vAPR = gauge streaming rate × 52.14 weeks × AERO price ÷ staked TVL,
-    over live gauges streaming emissions; tokens priced via Alchemy spot with prices.csv fallback, gauges with
-    unpriceable tokens skipped. Pool "type" from LpSugar (≤ 0 = basic AMM, &gt; 0 = CL).</li>
+    over live gauges streaming emissions. Tokens (and AERO) are valued at the latest epoch flip from the
+    committed prices.csv — deterministic between runs, refreshed when epochs close — with live Alchemy spot
+    only for tokens outside its tracked-pool universe; gauges with unpriceable tokens are skipped.
+    Pool "type" from LpSugar (≤ 0 = basic AMM, &gt; 0 = CL).</li>
     <li>Historical ceiling: pool-history.csv snapshots gauge state 1h after each epoch flip via archive calls;
     the AERO rate per epoch comes from the gauge's own rewardRateByEpoch record. Our TVL is the combined
     gauge balance of our addresses (the veAERO voter and the treasury LP address ${OUR_LP_ADDRESSES[1].slice(
@@ -1143,7 +1326,14 @@ async function main() {
       var weeklyUsd = weeklyAero * S.prices.aero;
       var stakedAfter = S.pool.stakedTvlUsd + capital;
       // Our stake = what we already have in the gauge plus the new deposit
-      var lpIncome = stakedAfter > 0 ? weeklyUsd * (S.pool.ourStakedUsd + capital) / stakedAfter : 0;
+      var ourLpStake = S.pool.ourStakedUsd + capital;
+      var lpGross = stakedAfter > 0 ? weeklyUsd * ourLpStake / stakedAfter : 0;
+      // Small-farmer background: capital below the deterrence threshold is
+      // never kept out, only supply-bounded — floored at the external stake
+      // already present. It dilutes our capture as a leak.
+      var currentExternal = S.pool.stakedTvlUsd - S.pool.ourStakedUsd;
+      var bgStake = Math.max(parseFloat(el('small-bg').value) || 0, currentExternal);
+      var lpIncome = ourLpStake + bgStake > 0 ? weeklyUsd * ourLpStake / (ourLpStake + bgStake) : 0;
       var ownVoteIncome = poolVotes > 0 ? S.pool.feesBribesUsd.latest * ourVotes / poolVotes : 0;
       // Non-allocated votes spread across the proportional baseline's pools
       var baselineOther = S.voterPower - S.baselineVotesOnPool;
@@ -1157,7 +1347,9 @@ async function main() {
       var vApr = stakedAfter > 0 ? weeklyUsd * EPOCHS_PER_YEAR / stakedAfter * 100 : 0;
       return {
         poolVotes: poolVotes, share: share, weeklyAero: weeklyAero, weeklyUsd: weeklyUsd,
-        lpIncome: lpIncome, ownVoteIncome: ownVoteIncome, otherIncome: otherIncome,
+        lpGross: lpGross, lpIncome: lpIncome, leak: lpGross - lpIncome,
+        ourLpStake: ourLpStake, bgStake: bgStake,
+        ownVoteIncome: ownVoteIncome, otherIncome: otherIncome,
         total: lpIncome + ownVoteIncome + otherIncome, vApr: vApr, stakedAfter: stakedAfter
       };
     }
@@ -1166,6 +1358,11 @@ async function main() {
       cell.textContent = (delta >= 0 ? '+' : '−') + fmtU(Math.abs(delta));
       cell.classList.toggle('delta-pos', delta >= 0);
       cell.classList.toggle('delta-neg', delta < 0);
+    }
+
+    function leakCell(cell, leak) {
+      cell.textContent = '−' + fmtU(leak);
+      cell.classList.toggle('delta-neg', leak >= 0.5);
     }
 
     function recalc() {
@@ -1194,32 +1391,74 @@ async function main() {
         var b = h * unstaked + allowance - annualUsd;
         return (-b + Math.sqrt(b * b + 4 * h * annualUsd * unstaked)) / (2 * h);
       };
+      // Farmer-response equilibrium: farmers of the reference size/patience
+      // enter until the marginal one only nets the hurdle, so staked TVL rises
+      // to the deterrence level (if above the deterred scenario's TVL) and our
+      // emissions capture is diluted accordingly. Voting income is unaffected.
+      var equilibrium = function(sc) {
+        var req = deterTvl(sc.weeklyUsd * EPOCHS_PER_YEAR);
+        var grossDenom = Math.max(sc.stakedAfter, req);
+        var netDenom = Math.max(sc.ourLpStake + sc.bgStake, req);
+        var eqGross = isFinite(grossDenom) && grossDenom > 0
+          ? sc.weeklyUsd * sc.ourLpStake / grossDenom : 0;
+        var eqLp = isFinite(netDenom) && netDenom > 0
+          ? sc.weeklyUsd * sc.ourLpStake / netDenom : 0;
+        return {
+          lpGross: eqGross, lpIncome: eqLp, leak: eqGross - eqLp,
+          total: eqLp + sc.ownVoteIncome + sc.otherIncome
+        };
+      };
       var baselineAlloc = S.baselineVotesOnPool / S.voterPower;
       // Baseline = proportional voting income + what our existing stake would
       // still earn from the emissions other voters send to the pool.
       var baseScen = scenario(baselineAlloc, 0);
       var baseline = S.baselineEarningsUsd.latest + baseScen.lpIncome;
       var s = scenario(alloc, capital);
+      var eq = equilibrium(s);
 
       el('out-pool-votes').textContent = fmtN(s.poolVotes);
       el('out-share').textContent = (s.share * 100).toFixed(4) + '%';
       el('out-emissions').textContent = fmtN(s.weeklyAero) + ' AERO';
       el('out-emissions-usd').textContent = fmtU(s.weeklyUsd) + '/wk';
 
-      el('cmp-lp-cur').textContent = fmtU(baseScen.lpIncome);
-      el('cmp-lp').textContent = fmtU(s.lpIncome);
+      el('cmp-lp-cur').textContent = fmtU(baseScen.lpGross);
+      el('cmp-lp').textContent = fmtU(s.lpGross);
+      el('cmp-lp-eq').textContent = fmtU(eq.lpGross);
+      leakCell(el('cmp-leak-cur'), baseScen.leak);
+      leakCell(el('cmp-leak'), s.leak);
+      leakCell(el('cmp-leak-eq'), eq.leak);
       el('cmp-own-cur').textContent = fmtU(baseScen.ownVoteIncome, 2);
       el('cmp-own').textContent = fmtU(s.ownVoteIncome, 2);
+      el('cmp-own-eq').textContent = fmtU(s.ownVoteIncome, 2);
       el('cmp-other-cur').textContent = fmtU(baseline - baseScen.lpIncome - baseScen.ownVoteIncome);
       el('cmp-other').textContent = fmtU(s.otherIncome);
+      el('cmp-other-eq').textContent = fmtU(s.otherIncome);
       el('cmp-total-cur').textContent = fmtU(baseline);
       el('cmp-total').textContent = fmtU(s.total);
+      el('cmp-total-eq').textContent = fmtU(eq.total);
       deltaCell(el('cmp-delta'), s.total - baseline);
+      deltaCell(el('cmp-delta-eq'), eq.total - baseline);
       deltaCell(el('cmp-delta-year'), (s.total - baseline) * EPOCHS_PER_YEAR);
+      deltaCell(el('cmp-delta-year-eq'), (eq.total - baseline) * EPOCHS_PER_YEAR);
 
       var annualUsd = s.weeklyUsd * EPOCHS_PER_YEAR;
       var tvlReq = deterTvl(annualUsd);
       var extra = Math.max(0, tvlReq - s.stakedAfter);
+
+      // Optimal threshold given the scenario's stakes: the smallest farmer the
+      // staked TVL already deters — any higher threshold only adds leak, any
+      // lower one needs TVL that isn't posted. Inverts the deterrence
+      // condition annual = h·S + (52.14·F/H)·S/(S+U) for F at S = stakedAfter.
+      var hFrac = hurdle / 100;
+      var fStar = 0;
+      if (refH > 0 && s.stakedAfter > 0 && annualUsd > hFrac * s.stakedAfter) {
+        var cNeed = (annualUsd - hFrac * s.stakedAfter) * (s.stakedAfter + unstaked) / s.stakedAfter;
+        fStar = Math.round(cNeed * refH / EPOCHS_PER_YEAR / 100) * 100;
+      }
+      var fStarEl = el('fstar-apply');
+      fStarEl.textContent = fStar > 0 ? fmtU(fStar) : 'none — vAPR already below the hurdle';
+      fStarEl.dataset.fstar = fStar;
+
       el('det-vapr').textContent = s.vApr.toFixed(1) + '%';
       el('det-req').textContent = !isFinite(tvlReq) ? '–'
         : tvlReq === 0 ? 'none — friction alone deters' : fmtU(tvlReq);
@@ -1260,18 +1499,21 @@ async function main() {
       body.textContent = '';
       [5, 10, 25, 50, 75, 100].forEach(function(pct) {
         var r = scenario(pct / 100, capital);
+        var rEq = equilibrium(r);
         var req = deterTvl(r.weeklyUsd * EPOCHS_PER_YEAR);
         var add = Math.max(0, req - r.stakedAfter);
         var tr = document.createElement('tr');
         var cells = [
           pct + '%', fmtN(r.weeklyAero), fmtU(r.weeklyUsd), fmtU(r.lpIncome), fmtU(r.total),
-          null, r.vApr.toFixed(1) + '%',
+          null, null, r.vApr.toFixed(1) + '%',
           isFinite(req) ? fmtU(req) : '–', isFinite(req) ? fmtU(add) : '–'
         ];
         cells.forEach(function(text, i) {
           var td = document.createElement('td');
           td.className = 'right';
-          if (i === 5) deltaCell(td, r.total - baseline); else td.textContent = text;
+          if (i === 5) deltaCell(td, r.total - baseline);
+          else if (i === 6) deltaCell(td, rEq.total - baseline);
+          else td.textContent = text;
           tr.appendChild(td);
         });
         body.appendChild(tr);
@@ -1285,7 +1527,35 @@ async function main() {
     }
     bindSlider('alloc-slider', 'alloc');
     bindSlider('cap-slider', 'cap');
-    ['hurdle', 'ref-farmer', 'ref-patience'].forEach(function(id) {
+    // Historical background curve: peak concurrent stake ever observed from
+    // farmers below a given size (launch week excluded). Changing the
+    // deterrence threshold snaps the background to the measured value; the
+    // background stays hand-editable afterwards. Registered before the recalc
+    // listener so the new background is in place when recalc reads it.
+    function bgForThreshold(f) {
+      var pts = [[0, 0]].concat(S.hurdle.bgCurve);
+      var last = pts[pts.length - 1];
+      if (f >= last[0]) return last[1];
+      for (var i = 1; i < pts.length; i++) {
+        if (f <= pts[i][0]) {
+          var x0 = pts[i - 1][0], y0 = pts[i - 1][1];
+          var x1 = pts[i][0], y1 = pts[i][1];
+          return y0 + (y1 - y0) * (f - x0) / (x1 - x0);
+        }
+      }
+      return last[1];
+    }
+    el('ref-farmer').addEventListener('input', function() {
+      el('small-bg').value = Math.round(bgForThreshold(parseFloat(el('ref-farmer').value) || 0));
+    });
+    el('fstar-apply').addEventListener('click', function(e) {
+      e.preventDefault();
+      var f = parseFloat(el('fstar-apply').dataset.fstar) || 0;
+      if (f <= 0) return;
+      el('ref-farmer').value = f;
+      el('ref-farmer').dispatchEvent(new Event('input')); // auto-fills the background, recalcs
+    });
+    ['hurdle', 'ref-farmer', 'ref-patience', 'small-bg'].forEach(function(id) {
       el(id).addEventListener('input', recalc);
     });
     recalc();
