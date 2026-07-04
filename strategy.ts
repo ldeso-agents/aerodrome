@@ -56,10 +56,23 @@ const REF_FARMER_USD = 10_000;
 const REF_PATIENCE_WEEKS = 8;
 // Farmers below REF_FARMER_USD are priced rather than deterred: their
 // aggregate stake is bounded by the supply of small capital hunting this
-// gauge, not by yield indifference. Peak concurrent sub-threshold stake over
-// the gauge's history excluding the launch week (per-address LP-transfer scan
-// via Blockscout, 2026-07-04, entry-valued; peaks fell on 2026-01-25 in the
-// high-emission era): < $2k farmers: $13k · < $5k: $33k · < $10k: $48k.
+// gauge, not by yield indifference. The curve below is the peak concurrent
+// stake ever observed from farmers under each size — measured from the
+// gauge's full per-address LP-transfer history (Blockscout, 2026-07-04,
+// entry-valued, launch week excluded; peaks fell in the high-emission era of
+// January 2026). The background input auto-fills from it when the threshold
+// changes.
+const SMALL_FARMER_BG_CURVE: [number, number][] = [
+  [2_000, 13_000],
+  [5_000, 33_000],
+  [10_000, 48_000],
+  [15_000, 84_000],
+  [20_000, 102_000],
+  [25_000, 120_000],
+  [50_000, 148_000],
+  [100_000, 323_000],
+];
+// Curve value at the default threshold (REF_FARMER_USD).
 const SMALL_FARMER_BG_USD = 48_000;
 // Historical inflows at least this large (Δ external LP, % of gauge supply)
 // count as "sized" — evidence that capital of consequence arrived.
@@ -836,6 +849,7 @@ async function main() {
       frictionAllowanceUsd,
       refFarmer: { usd: REF_FARMER_USD, patienceWeeks: REF_PATIENCE_WEEKS },
       smallFarmerBgUsd: SMALL_FARMER_BG_USD,
+      bgCurve: SMALL_FARMER_BG_CURVE,
       crossSection,
       historical: {
         nEpochs: historical.points.length,
@@ -992,7 +1006,8 @@ async function main() {
     <label>Smallest farmer to deter ($)
       <input type="number" id="ref-farmer" min="1000" step="1000" value="${REF_FARMER_USD}">
       <span class="hint">positions this size and up are kept out with TVL (deterrence tables below);
-      smaller ones are priced as the background leak instead</span>
+      smaller ones are priced as the background leak instead — changing this auto-fills the
+      background from the historical curve</span>
     </label>
     <label>Farmer patience (weeks)
       <input type="number" id="ref-patience" min="1" step="1" value="${REF_PATIENCE_WEEKS}">
@@ -1001,9 +1016,9 @@ async function main() {
     </label>
     <label>Small-farmer background ($)
       <input type="number" id="small-bg" min="0" step="1000" value="${SMALL_FARMER_BG_USD}">
-      <span class="hint">aggregate stake expected from farmers below the deterrence threshold —
-      supply-bounded, not deterrable; historical peaks (launch week excluded):
-      $13k (&lt;$2k), $33k (&lt;$5k), $48k (&lt;$10k)</span>
+      <span class="hint">aggregate stake expected from farmers below the deterrence threshold.
+      Auto-fills from <em>measured history</em> — the most sub-threshold capital ever staked at once
+      (launch week excluded; see assumptions for the full curve) — and can be overridden freely</span>
     </label>
   </div>
   <p class="muted">Market hurdle default of ${defaultHurdlePct}% is the TVL-weighted p25 emissions-vAPR
@@ -1231,11 +1246,15 @@ async function main() {
     gauge's first epoch is likewise excluded: its flows were part of the token launch.</li>
     <li>Small-farmer background: farmers below the deterrence threshold are priced, not deterred — their
     aggregate stake is bounded by the supply of small capital hunting this gauge, not by yield indifference.
-    The full per-address LP-transfer history (195 external stake episodes; entries during the launch
-    week excluded as launch behavior, not yield-chasing) shows peak concurrent sub-threshold stake of
-    $13k / $33k / $48k for farmers under $2k / $5k / $10k, even in the 130%+ displayed-vAPR era. The
-    leak row reduces our capture to our stake ÷ (our stake + background); the background is floored at
-    the external stake currently present, so setting it to zero recovers the old static model.</li>
+    The background is a <em>historical measurement</em>, not a model: from the full per-address
+    LP-transfer history (195 external stake episodes; entries during the launch week excluded as launch
+    behavior, not yield-chasing), the most capital farmers below each size ever had staked at once was
+    ${SMALL_FARMER_BG_CURVE.map(([f, b]) => `&lt;$${f / 1000}k → $${b / 1000}k`).join(" · ")}
+    (unbounded: $886k), with the peaks in the high-emission era of January 2026. Changing the threshold
+    auto-fills the background by interpolating this curve; a future kVCM narrative could exceed it, so
+    it stays editable. The leak row reduces our capture to our stake ÷ (our stake + background); the
+    background is floored at the external stake currently present, so setting it to zero recovers the
+    old static model.</li>
     <li>Incumbent staked TVL is assumed static; in practice mercenary TVL chases displayed vAPR — that response is exactly what the deterrence calculator is for.</li>
     <li>Break-even holding assumes the farmer buys the ${escapeHtml(
       t0.symbol
@@ -1488,6 +1507,27 @@ async function main() {
     }
     bindSlider('alloc-slider', 'alloc');
     bindSlider('cap-slider', 'cap');
+    // Historical background curve: peak concurrent stake ever observed from
+    // farmers below a given size (launch week excluded). Changing the
+    // deterrence threshold snaps the background to the measured value; the
+    // background stays hand-editable afterwards. Registered before the recalc
+    // listener so the new background is in place when recalc reads it.
+    function bgForThreshold(f) {
+      var pts = [[0, 0]].concat(S.hurdle.bgCurve);
+      var last = pts[pts.length - 1];
+      if (f >= last[0]) return last[1];
+      for (var i = 1; i < pts.length; i++) {
+        if (f <= pts[i][0]) {
+          var x0 = pts[i - 1][0], y0 = pts[i - 1][1];
+          var x1 = pts[i][0], y1 = pts[i][1];
+          return y0 + (y1 - y0) * (f - x0) / (x1 - x0);
+        }
+      }
+      return last[1];
+    }
+    el('ref-farmer').addEventListener('input', function() {
+      el('small-bg').value = Math.round(bgForThreshold(parseFloat(el('ref-farmer').value) || 0));
+    });
     ['hurdle', 'ref-farmer', 'ref-patience', 'small-bg'].forEach(function(id) {
       el(id).addEventListener('input', recalc);
     });
