@@ -34,7 +34,7 @@
 </head>
 <body>
   <h1>Aerodrome Own-Pool Strategy <span class="muted">→ <a href="index.html">voting dashboard</a></span></h1>
-  <p class="voter">Voter: <code>0xa79cd47655156b299762dfe92a67980805ce5a31</code> · Pool: <code>0x5C0D76fab1822bDeb47308eD6028231761ED723E</code> (vAMM-kVCM/USDC) · Snapshot: 2026-07-17 14:01 UTC · Epoch 151 (2026-07-16)</p>
+  <p class="voter">Voter: <code>0xa79cd47655156b299762dfe92a67980805ce5a31</code> · Pool: <code>0x5C0D76fab1822bDeb47308eD6028231761ED723E</code> (vAMM-kVCM/USDC) · Snapshot: 2026-07-21 13:55 UTC · Epoch 151 (2026-07-16)</p>
   <div class="intro">
     <p>This page models farming our own votes: instead of voting for pools with the best fees and bribes,
     point some or all of our 5,352,718 votes at our own vAMM-kVCM/USDC pool so it
@@ -45,22 +45,22 @@
   <h2>Snapshot</h2>
   <div class="scroll"><table>
     <tbody>
-      <tr><td>AERO price</td><td class="right">$0.4750</td>
-          <td>kVCM price</td><td class="right">$0.0301</td></tr>
-      <tr><td>Weekly emissions to gauges</td><td class="right">4,051,234 AERO ($1,924,405) of 8,969,150 minted</td>
-          <td>Total votes this epoch</td><td class="right">999,026,838</td></tr>
-      <tr><td>Our vote power</td><td class="right">5,352,718 (0.536% of total)</td>
+      <tr><td>AERO price</td><td class="right">$0.4310</td>
+          <td>kVCM price</td><td class="right">$0.0251</td></tr>
+      <tr><td>Weekly emissions to gauges</td><td class="right">4,051,234 AERO ($1,745,987) of 8,969,150 minted</td>
+          <td>Total votes this epoch</td><td class="right">1,002,351,572</td></tr>
+      <tr><td>Our vote power</td><td class="right">5,352,718 (0.534% of total)</td>
           <td>Pool votes now</td><td class="right">805,901 (802,990 ours)</td></tr>
-      <tr><td>Pool TVL</td><td class="right">$109,237</td>
-          <td>Staked (gauge) TVL</td><td class="right">$97,851</td></tr>
-      <tr><td>Pool fees+bribes, latest epoch</td><td class="right">$9.90</td>
+      <tr><td>Pool TVL</td><td class="right">$102,397</td>
+          <td>Staked (gauge) TVL</td><td class="right">$91,744</td></tr>
+      <tr><td>Pool fees+bribes, latest epoch</td><td class="right">$9.03</td>
           <td>Gauge streaming this epoch</td><td class="right">3,280 AERO/wk</td></tr>
-      <tr><td>Current voting earnings, epoch 151</td><td class="right">$4,474/wk</td>
-          <td>Trailing 4-epoch average</td><td class="right">$5,190/wk</td></tr>
+      <tr><td>Current voting earnings, epoch 151</td><td class="right">$4,399/wk</td>
+          <td>Trailing 4-epoch average</td><td class="right">$5,171/wk</td></tr>
     </tbody>
   </table></div>
   <p class="muted">Maximum emissions our votes could send to the pool (100% allocation):
-  <strong>21,718 AERO/week ≈ $10,316/week</strong> at the current AERO price.</p>
+  <strong>21,646 AERO/week ≈ $9,329/week</strong> at the current AERO price.</p>
 
   <h2>Scenario</h2>
   <div class="controls">
@@ -77,11 +77,11 @@
       <input type="number" id="cap-kvcm" min="0" step="1000" value="50000">
     </label>
     <label>Target vAPR ceiling (%)
-      <input type="number" id="target-vapr" min="0.1" step="1" value="6">
+      <input type="number" id="target-vapr" min="0.1" step="1" value="5">
     </label>
   </div>
-  <p class="muted">Target vAPR ceiling default of 6% is inferred from mercenary behavior
-  (see <a href="#inferred-ceiling">Inferred vAPR ceiling</a>): market hurdle p25 = 5.6% across 41 comparable AMM gauges; external LP historically arrived in our gauge above 14.8%. Edit freely — it only drives the deterrence rows.</p>
+  <p class="muted">Target vAPR ceiling default of 5% is inferred from mercenary behavior
+  (see <a href="#inferred-ceiling">Inferred vAPR ceiling</a>): market hurdle p25 = 3.8% across 41 comparable AMM gauges; external LP historically arrived in our gauge above 14.8%. Edit freely — it only drives the deterrence rows.</p>
 
   <div class="scroll"><table id="emissions-table">
     <thead><tr><th></th><th class="right">Value</th></tr></thead>
@@ -105,7 +105,7 @@
       <tr><td>Annualized delta</td><td class="right">–</td><td class="right" id="cmp-delta-year"></td></tr>
     </tbody>
   </table></div>
-  <p class="muted">Current column is epoch 151 actuals (trailing 4-epoch average: $5,190/wk). Scenario assumes incumbent stakers ($97,851) neither add nor remove liquidity.</p>
+  <p class="muted">Current column is epoch 151 actuals (trailing 4-epoch average: $5,171/wk). Scenario assumes incumbent stakers ($91,744) neither add nor remove liquidity.</p>
 
   <h2>Mercenary deterrence: TVL to add before the flip</h2>
   <p class="intro">Once emissions land, the gauge's displayed vAPR = annualized emissions ÷ staked TVL.
@@ -134,9 +134,9 @@
     <thead><tr><th>Cross-section (today)</th><th class="right">Gauges</th><th class="right">Staked TVL</th>
       <th class="right">p25</th><th class="right">p50</th><th class="right">p75</th></tr></thead>
     <tbody>
-      <tr><td>Comparable AMM (volatile + stable)</td><td class="right">41</td><td class="right">$85,039,664</td><td class="right">5.6%</td><td class="right">10.8%</td><td class="right">26.0%</td></tr>
-      <tr><td>Concentrated liquidity</td><td class="right">21</td><td class="right">$62,725,100</td><td class="right">11.7%</td><td class="right">15.9%</td><td class="right">15.9%</td></tr>
-      <tr><td>All pool types</td><td class="right">62</td><td class="right">$147,764,765</td><td class="right">9.6%</td><td class="right">15.9%</td><td class="right">26.0%</td></tr>
+      <tr><td>Comparable AMM (volatile + stable)</td><td class="right">41</td><td class="right">$84,274,939</td><td class="right">3.8%</td><td class="right">8.9%</td><td class="right">25.8%</td></tr>
+      <tr><td>Concentrated liquidity</td><td class="right">28</td><td class="right">$69,431,965</td><td class="right">9.8%</td><td class="right">14.6%</td><td class="right">14.6%</td></tr>
+      <tr><td>All pool types</td><td class="right">69</td><td class="right">$153,706,905</td><td class="right">8.6%</td><td class="right">14.6%</td><td class="right">25.8%</td></tr>
     </tbody>
   </table></div>
   <p class="muted">TVL-weighted percentiles over live gauges with ≥ $100,000 staked, our pool excluded; 341 of 557 emitting gauges priced (216 skipped for missing token prices).
@@ -145,11 +145,11 @@
   <div class="scroll"><table>
     <thead><tr><th>Displayed vAPR</th><th class="right">AMM gauges</th><th class="right">Share of staked TVL</th></tr></thead>
     <tbody>
-      <tr><td>0–10%</td><td class="right">22</td><td class="right">46.8%</td></tr>
-      <tr><td>10–20%</td><td class="right">3</td><td class="right">5.9%</td></tr>
-      <tr><td>20–40%</td><td class="right">6</td><td class="right">36.7%</td></tr>
-      <tr><td>40–80%</td><td class="right">3</td><td class="right">5.2%</td></tr>
-      <tr><td>80%+</td><td class="right">7</td><td class="right">5.4%</td></tr>
+      <tr><td>0–10%</td><td class="right">23</td><td class="right">53.8%</td></tr>
+      <tr><td>10–20%</td><td class="right">3</td><td class="right">3.3%</td></tr>
+      <tr><td>20–40%</td><td class="right">7</td><td class="right">37.3%</td></tr>
+      <tr><td>40–80%</td><td class="right">2</td><td class="right">0.5%</td></tr>
+      <tr><td>80%+</td><td class="right">6</td><td class="right">5.1%</td></tr>
     </tbody>
   </table></div>
 
@@ -217,12 +217,12 @@
   <div class="footnotes">
     <strong>Assumptions</strong>
     <li>Emissions to a gauge = total gauge emissions × pool votes / total votes. Only 45% of Minter weekly (8,969,150 AERO) reaches gauges — the veAERO rebase and team allocation are carved out — so the total is measured by summing every live gauge's streaming rate (4,051,234 AERO/wk).</li>
-    <li>One-epoch lag: votes cast now direct emissions that start streaming at the next flip. The gauge currently streams 3,280 AERO/wk (set by last epoch's votes); current votes imply 3,268 AERO/wk at the next flip.</li>
+    <li>One-epoch lag: votes cast now direct emissions that start streaming at the next flip. The gauge currently streams 3,280 AERO/wk (set by last epoch's votes); current votes imply 3,257 AERO/wk at the next flip.</li>
     <li>Total votes are held constant: reallocating our votes moves them between pools without changing the total.</li>
-    <li>Own-pool fees+bribes use the latest epoch's $9.90 (trailing 4-epoch average $11.28); voting more for our own pool doesn't create new fees, it only changes our share of them.</li>
+    <li>Own-pool fees+bribes use the latest epoch's $9.03 (trailing 4-epoch average $11.06); voting more for our own pool doesn't create new fees, it only changes our share of them.</li>
     <li>Other-pool voting income assumes the freed/remaining votes stay spread across our current pools in the same proportions.</li>
     <li>Incumbent staked TVL is assumed static; in practice mercenary TVL chases displayed vAPR — that response is exactly what the deterrence calculator is for.</li>
-    <li>Prices are point-in-time (AERO $0.4750, kVCM $0.0301); no price-impact modeling for acquiring kVCM or for AERO sell pressure from farming.</li>
+    <li>Prices are point-in-time (AERO $0.4310, kVCM $0.0251); no price-impact modeling for acquiring kVCM or for AERO sell pressure from farming.</li>
     <li>LP deposits into a vAMM pool must be balanced 50/50 by value at deposit time; the two capital inputs are summed into one position.</li>
     <li>Cross-sectional hurdle: emissions-vAPR = gauge streaming rate × 52.14 weeks × AERO price ÷ staked TVL,
     over live gauges streaming emissions; tokens priced via Alchemy spot with prices.csv fallback, gauges with
@@ -236,7 +236,7 @@
   </div>
 
   <script>
-  const S = {"generatedAt":"2026-07-17T14:01:51.431Z","epochNumber":151,"epochDate":"2026-07-16","voterAddress":"0xa79cd47655156b299762dfe92a67980805ce5a31","minterWeeklyAero":8969149.540107574,"weeklyToGaugesAero":4051234.4892427637,"totalVotes":999026837.9762797,"poolVotes":805900.9987046603,"voterPower":5352718.402419116,"voterVotesOnPool":802990.4,"currentEarningsUsd":{"latest":4474.4,"trailing":5189.879999999999,"trailingEpochs":4},"otherPools":[{"name":"CL50-WETH/USDC","votes":1069390.5,"otherVotes":100039654.12909147,"reward":110496.48},{"name":"vAMM-USDC/AERO","votes":800231.4,"otherVotes":70969337.53511736,"reward":39545.05},{"name":"CL200-WETH/AERO","votes":564711.79,"otherVotes":52418355.84326668,"reward":29901.43},{"name":"CL10-WETH/cbBTC","votes":527242.76,"otherVotes":51599845.48578799,"reward":69825.7},{"name":"CL100-WETH/cbBTC","votes":594151.74,"otherVotes":50592937.91303817,"reward":58655.76},{"name":"CL100-WETH/USDC","votes":357561.59,"otherVotes":29913032.301572796,"reward":49094.13},{"name":"CL50-USDC/cbBTC","votes":315275.11,"otherVotes":27640078.91332507,"reward":31330.39},{"name":"CL100-WETH/VVV","votes":321163.1,"otherVotes":27216614.77911072,"reward":18510.59}],"pool":{"symbol":"vAMM-kVCM/USDC","address":"0x5C0D76fab1822bDeb47308eD6028231761ED723E","gauge":"0x57387e4639048B67C30C911a145368bC5B33fE3b","token0":{"symbol":"kVCM","reserve":2029787.2519607435,"staked":1818220.7134180372},"token1":{"symbol":"USDC","reserve":48071.244646,"staked":43060.735873},"poolTvlUsd":109236.58021069775,"stakedTvlUsd":97850.75387093017,"feesBribesUsd":{"latest":9.9,"trailing":11.28},"gaugeWeeklyAero":3280.379618713677},"prices":{"aero":0.4750170216,"token0":0.0301370389,"token1":0.9998659946,"dates":{"aero":"2026-07-17","token0":"2026-07-17","token1":"2026-07-17"}},"hurdle":{"inferredCeiling":6,"crossSection":{"nGauges":557,"nPriced":341,"unpricedGauges":216,"tvlFloor":100000,"amm":{"n":41,"tvl":85039664.08596806,"p25":5.641180643498679,"p50":10.796995133456049,"p75":25.960164888991706},"cl":{"n":21,"tvl":62725100.481894754,"p25":11.691813331864353,"p50":15.94099022413925,"p75":15.94099022413925},"all":{"n":62,"tvl":147764764.56786287,"p25":9.603303502070078,"p50":15.94099022413925,"p75":25.960164888991706},"buckets":[{"label":"0–10%","count":22,"tvlSharePct":46.7627729921921},{"label":"10–20%","count":3,"tvlSharePct":5.935569709321747},{"label":"20–40%","count":6,"tvlSharePct":36.716251325152214},{"label":"40–80%","count":3,"tvlSharePct":5.187518253848537},{"label":"80%+","count":7,"tvlSharePct":5.397887719485388}]},"historical":{"nEpochs":38,"nInflow":17,"minInflowVapr":14.76,"maxQuietVapr":90.77,"stump":{"vapr":62.41,"errors":8},"sufficient":true,"points":[{"epoch":113,"date":"2025-10-23","stakedTvlUsd":26626.69,"vapr":1652.81,"dExtPct":786.5455128368832,"inflow":true},{"epoch":114,"date":"2025-10-30","stakedTvlUsd":366949.37,"vapr":153.96,"dExtPct":10.662680544207754,"inflow":true},{"epoch":115,"date":"2025-11-06","stakedTvlUsd":393299.43,"vapr":167.71,"dExtPct":24.23474916677471,"inflow":true},{"epoch":116,"date":"2025-11-13","stakedTvlUsd":589440.18,"vapr":132.97,"dExtPct":86.60206593484445,"inflow":true},{"epoch":117,"date":"2025-11-20","stakedTvlUsd":843389.6,"vapr":86.81,"dExtPct":-41.07527834420992,"inflow":false},{"epoch":118,"date":"2025-11-27","stakedTvlUsd":717044.29,"vapr":90.77,"dExtPct":-8.064477686739968,"inflow":false},{"epoch":119,"date":"2025-12-04","stakedTvlUsd":657912.46,"vapr":93.14,"dExtPct":13.845890128769003,"inflow":true},{"epoch":120,"date":"2025-12-11","stakedTvlUsd":815457.59,"vapr":79.93,"dExtPct":2.6348176081181496,"inflow":true},{"epoch":121,"date":"2025-12-18","stakedTvlUsd":809704.62,"vapr":69.3,"dExtPct":14.41471451521981,"inflow":true},{"epoch":122,"date":"2025-12-25","stakedTvlUsd":862321.8,"vapr":62.14,"dExtPct":-6.643245040319573,"inflow":false},{"epoch":123,"date":"2026-01-01","stakedTvlUsd":747773.74,"vapr":60.04,"dExtPct":9.602173327507602,"inflow":true},{"epoch":124,"date":"2026-01-08","stakedTvlUsd":834354.49,"vapr":74.4,"dExtPct":1.5531760019577578,"inflow":false},{"epoch":125,"date":"2026-01-15","stakedTvlUsd":825392.29,"vapr":62.41,"dExtPct":-0.5488843963113589,"inflow":false},{"epoch":126,"date":"2026-01-22","stakedTvlUsd":818753.92,"vapr":52.74,"dExtPct":-26.768556749232147,"inflow":false},{"epoch":127,"date":"2026-01-29","stakedTvlUsd":482984.7,"vapr":54.01,"dExtPct":-20.57664577496605,"inflow":false},{"epoch":128,"date":"2026-02-05","stakedTvlUsd":382024.47,"vapr":36.76,"dExtPct":-37.307320644574155,"inflow":false},{"epoch":129,"date":"2026-02-12","stakedTvlUsd":235544.21,"vapr":34.18,"dExtPct":-14.535614673025224,"inflow":false},{"epoch":130,"date":"2026-02-19","stakedTvlUsd":200878.83,"vapr":0.87,"dExtPct":-29.632246188906514,"inflow":false},{"epoch":131,"date":"2026-02-26","stakedTvlUsd":142922.63,"vapr":0.74,"dExtPct":-81.12732570891968,"inflow":false},{"epoch":132,"date":"2026-03-05","stakedTvlUsd":26122.74,"vapr":5.29,"dExtPct":-18.739113388855472,"inflow":false},{"epoch":133,"date":"2026-03-12","stakedTvlUsd":14073.77,"vapr":14.76,"dExtPct":15.072788631756378,"inflow":true},{"epoch":134,"date":"2026-03-19","stakedTvlUsd":19325.87,"vapr":36.32,"dExtPct":16.865475228958857,"inflow":true},{"epoch":135,"date":"2026-03-26","stakedTvlUsd":26775.13,"vapr":7.45,"dExtPct":-15.227626860347756,"inflow":false},{"epoch":136,"date":"2026-04-02","stakedTvlUsd":22588.21,"vapr":10.09,"dExtPct":-48.813496174451544,"inflow":false},{"epoch":137,"date":"2026-04-09","stakedTvlUsd":11500.13,"vapr":17.18,"dExtPct":-0.8952834194261392,"inflow":false},{"epoch":138,"date":"2026-04-16","stakedTvlUsd":11167.62,"vapr":8.77,"dExtPct":-12.68824866853727,"inflow":false},{"epoch":139,"date":"2026-04-23","stakedTvlUsd":8670.39,"vapr":6.36,"dExtPct":-7.0318489557932,"inflow":false},{"epoch":140,"date":"2026-04-30","stakedTvlUsd":6979.58,"vapr":116.61,"dExtPct":94.77614029247626,"inflow":true},{"epoch":141,"date":"2026-05-07","stakedTvlUsd":12789.54,"vapr":80.6,"dExtPct":3.5386687072522225,"inflow":true},{"epoch":142,"date":"2026-05-14","stakedTvlUsd":12903.22,"vapr":83.1,"dExtPct":-7.999311902340804,"inflow":false},{"epoch":143,"date":"2026-05-21","stakedTvlUsd":10625.17,"vapr":71.9,"dExtPct":9.142843508778586,"inflow":true},{"epoch":144,"date":"2026-05-28","stakedTvlUsd":12326.54,"vapr":57.64,"dExtPct":1.4600475148033276,"inflow":false},{"epoch":145,"date":"2026-06-04","stakedTvlUsd":11823.04,"vapr":57.1,"dExtPct":0.5413639386655904,"inflow":false},{"epoch":146,"date":"2026-06-11","stakedTvlUsd":10772.68,"vapr":52.67,"dExtPct":2.5116998040932352,"inflow":true},{"epoch":147,"date":"2026-06-18","stakedTvlUsd":11731.19,"vapr":61.46,"dExtPct":0.0030495077065994156,"inflow":false},{"epoch":148,"date":"2026-06-25","stakedTvlUsd":12088.08,"vapr":68.2,"dExtPct":385.9229125091177,"inflow":true},{"epoch":149,"date":"2026-07-02","stakedTvlUsd":62160.76,"vapr":86.46,"dExtPct":5.313093884171369,"inflow":true},{"epoch":150,"date":"2026-07-09","stakedTvlUsd":94347.58,"vapr":94.42,"dExtPct":25.091517059132467,"inflow":true}]}}};
+  const S = {"generatedAt":"2026-07-21T13:55:31.647Z","epochNumber":151,"epochDate":"2026-07-16","voterAddress":"0xa79cd47655156b299762dfe92a67980805ce5a31","minterWeeklyAero":8969149.540107574,"weeklyToGaugesAero":4051234.4892427637,"totalVotes":1002351571.5020875,"poolVotes":805900.9987046603,"voterPower":5352718.402419116,"voterVotesOnPool":802990.4,"currentEarningsUsd":{"latest":4399.0199999999995,"trailing":5171.034999999999,"trailingEpochs":4},"otherPools":[{"name":"CL50-WETH/USDC","votes":1069390.5,"otherVotes":102682972.06469893,"reward":111597.7},{"name":"vAMM-USDC/AERO","votes":800231.4,"otherVotes":72021505.73623587,"reward":37750.3},{"name":"CL10-WETH/cbBTC","votes":527242.76,"otherVotes":54665854.54541281,"reward":71226.9},{"name":"CL100-WETH/cbBTC","votes":594151.74,"otherVotes":50565316.94648536,"reward":59844.25},{"name":"CL200-WETH/AERO","votes":564711.79,"otherVotes":47389326.74739693,"reward":28633.6},{"name":"CL50-USDC/cbBTC","votes":315275.11,"otherVotes":33014092.893837962,"reward":31669.82},{"name":"CL100-WETH/USDC","votes":357561.59,"otherVotes":29873292.194438465,"reward":49569.14},{"name":"CL100-WETH/VVV","votes":321163.1,"otherVotes":27223107.48292601,"reward":19422.43}],"pool":{"symbol":"vAMM-kVCM/USDC","address":"0x5C0D76fab1822bDeb47308eD6028231761ED723E","gauge":"0x57387e4639048B67C30C911a145368bC5B33fE3b","token0":{"symbol":"kVCM","reserve":2039839.5583812098,"staked":1827629.539732189},"token1":{"symbol":"USDC","reserve":51251.225659,"staked":45919.422229},"poolTvlUsd":102396.7260304708,"stakedTvlUsd":91744.11805824666,"feesBribesUsd":{"latest":9.03,"trailing":11.0625},"gaugeWeeklyAero":3280.379618713677},"prices":{"aero":0.4309765895,"token0":0.0250760356,"token1":0.9998909487,"dates":{"aero":"2026-07-21","token0":"2026-07-21","token1":"2026-07-21"}},"hurdle":{"inferredCeiling":5,"crossSection":{"nGauges":557,"nPriced":341,"unpricedGauges":216,"tvlFloor":100000,"amm":{"n":41,"tvl":84274939.45200555,"p25":3.7947476757126517,"p50":8.861541498765769,"p75":25.7991888467184},"cl":{"n":28,"tvl":69431965.04882933,"p25":9.818148284730103,"p50":14.590847669729687,"p75":14.590847669729687},"all":{"n":69,"tvl":153706904.50083488,"p25":8.606193848037512,"p50":14.590847669729687,"p75":25.7991888467184},"buckets":[{"label":"0–10%","count":23,"tvlSharePct":53.758475459173795},{"label":"10–20%","count":3,"tvlSharePct":3.318693977559515},{"label":"20–40%","count":7,"tvlSharePct":37.321460165929835},{"label":"40–80%","count":2,"tvlSharePct":0.49078867271053056},{"label":"80%+","count":6,"tvlSharePct":5.110581724626362}]},"historical":{"nEpochs":38,"nInflow":17,"minInflowVapr":14.76,"maxQuietVapr":90.77,"stump":{"vapr":62.41,"errors":8},"sufficient":true,"points":[{"epoch":113,"date":"2025-10-23","stakedTvlUsd":26626.69,"vapr":1652.81,"dExtPct":786.5455128368832,"inflow":true},{"epoch":114,"date":"2025-10-30","stakedTvlUsd":366949.37,"vapr":153.96,"dExtPct":10.662680544207754,"inflow":true},{"epoch":115,"date":"2025-11-06","stakedTvlUsd":393299.43,"vapr":167.71,"dExtPct":24.23474916677471,"inflow":true},{"epoch":116,"date":"2025-11-13","stakedTvlUsd":589440.18,"vapr":132.97,"dExtPct":86.60206593484445,"inflow":true},{"epoch":117,"date":"2025-11-20","stakedTvlUsd":843389.6,"vapr":86.81,"dExtPct":-41.07527834420992,"inflow":false},{"epoch":118,"date":"2025-11-27","stakedTvlUsd":717044.29,"vapr":90.77,"dExtPct":-8.064477686739968,"inflow":false},{"epoch":119,"date":"2025-12-04","stakedTvlUsd":657912.46,"vapr":93.14,"dExtPct":13.845890128769003,"inflow":true},{"epoch":120,"date":"2025-12-11","stakedTvlUsd":815457.59,"vapr":79.93,"dExtPct":2.6348176081181496,"inflow":true},{"epoch":121,"date":"2025-12-18","stakedTvlUsd":809704.62,"vapr":69.3,"dExtPct":14.41471451521981,"inflow":true},{"epoch":122,"date":"2025-12-25","stakedTvlUsd":862321.8,"vapr":62.14,"dExtPct":-6.643245040319573,"inflow":false},{"epoch":123,"date":"2026-01-01","stakedTvlUsd":747773.74,"vapr":60.04,"dExtPct":9.602173327507602,"inflow":true},{"epoch":124,"date":"2026-01-08","stakedTvlUsd":834354.49,"vapr":74.4,"dExtPct":1.5531760019577578,"inflow":false},{"epoch":125,"date":"2026-01-15","stakedTvlUsd":825392.29,"vapr":62.41,"dExtPct":-0.5488843963113589,"inflow":false},{"epoch":126,"date":"2026-01-22","stakedTvlUsd":818753.92,"vapr":52.74,"dExtPct":-26.768556749232147,"inflow":false},{"epoch":127,"date":"2026-01-29","stakedTvlUsd":482984.7,"vapr":54.01,"dExtPct":-20.57664577496605,"inflow":false},{"epoch":128,"date":"2026-02-05","stakedTvlUsd":382024.47,"vapr":36.76,"dExtPct":-37.307320644574155,"inflow":false},{"epoch":129,"date":"2026-02-12","stakedTvlUsd":235544.21,"vapr":34.18,"dExtPct":-14.535614673025224,"inflow":false},{"epoch":130,"date":"2026-02-19","stakedTvlUsd":200878.83,"vapr":0.87,"dExtPct":-29.632246188906514,"inflow":false},{"epoch":131,"date":"2026-02-26","stakedTvlUsd":142922.63,"vapr":0.74,"dExtPct":-81.12732570891968,"inflow":false},{"epoch":132,"date":"2026-03-05","stakedTvlUsd":26122.74,"vapr":5.29,"dExtPct":-18.739113388855472,"inflow":false},{"epoch":133,"date":"2026-03-12","stakedTvlUsd":14073.77,"vapr":14.76,"dExtPct":15.072788631756378,"inflow":true},{"epoch":134,"date":"2026-03-19","stakedTvlUsd":19325.87,"vapr":36.32,"dExtPct":16.865475228958857,"inflow":true},{"epoch":135,"date":"2026-03-26","stakedTvlUsd":26775.13,"vapr":7.45,"dExtPct":-15.227626860347756,"inflow":false},{"epoch":136,"date":"2026-04-02","stakedTvlUsd":22588.21,"vapr":10.09,"dExtPct":-48.813496174451544,"inflow":false},{"epoch":137,"date":"2026-04-09","stakedTvlUsd":11500.13,"vapr":17.18,"dExtPct":-0.8952834194261392,"inflow":false},{"epoch":138,"date":"2026-04-16","stakedTvlUsd":11167.62,"vapr":8.77,"dExtPct":-12.68824866853727,"inflow":false},{"epoch":139,"date":"2026-04-23","stakedTvlUsd":8670.39,"vapr":6.36,"dExtPct":-7.0318489557932,"inflow":false},{"epoch":140,"date":"2026-04-30","stakedTvlUsd":6979.58,"vapr":116.61,"dExtPct":94.77614029247626,"inflow":true},{"epoch":141,"date":"2026-05-07","stakedTvlUsd":12789.54,"vapr":80.6,"dExtPct":3.5386687072522225,"inflow":true},{"epoch":142,"date":"2026-05-14","stakedTvlUsd":12903.22,"vapr":83.1,"dExtPct":-7.999311902340804,"inflow":false},{"epoch":143,"date":"2026-05-21","stakedTvlUsd":10625.17,"vapr":71.9,"dExtPct":9.142843508778586,"inflow":true},{"epoch":144,"date":"2026-05-28","stakedTvlUsd":12326.54,"vapr":57.64,"dExtPct":1.4600475148033276,"inflow":false},{"epoch":145,"date":"2026-06-04","stakedTvlUsd":11823.04,"vapr":57.1,"dExtPct":0.5413639386655904,"inflow":false},{"epoch":146,"date":"2026-06-11","stakedTvlUsd":10772.68,"vapr":52.67,"dExtPct":2.5116998040932352,"inflow":true},{"epoch":147,"date":"2026-06-18","stakedTvlUsd":11731.19,"vapr":61.46,"dExtPct":0.0030495077065994156,"inflow":false},{"epoch":148,"date":"2026-06-25","stakedTvlUsd":12088.08,"vapr":68.2,"dExtPct":385.9229125091177,"inflow":true},{"epoch":149,"date":"2026-07-02","stakedTvlUsd":62160.76,"vapr":86.46,"dExtPct":5.313093884171369,"inflow":true},{"epoch":150,"date":"2026-07-09","stakedTvlUsd":94347.58,"vapr":94.42,"dExtPct":25.091517059132467,"inflow":true}]}}};
   (function() {
     var fmtN = function(n, d) { return n.toLocaleString('en-US', {minimumFractionDigits: d || 0, maximumFractionDigits: d || 0}); };
     var fmtU = function(n, d) { return '$' + fmtN(n, d); };
